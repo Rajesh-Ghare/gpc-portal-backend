@@ -45,6 +45,13 @@
   `GET /auth/me`, `POST /auth/logout` routes. Verified manually against a
   live server/database (including exhausting the OTP attempt limit) and via
   5 new automated integration tests.
+- Exam catalog admin CRUD: 15 routes under `/api/v1/admin` for categories,
+  competitive exams, and test series, gated by a new `catalog.*` permission
+  family (view/create/update/delete). Includes slug auto-generation,
+  duplicate-slug rejection, FK validation (exam→category, series→exam), and
+  soft-delete. First real use of the `requirePermission` middleware
+  (implemented in Phase 3, unused until now) — verified both directions via
+  6 new integration tests.
 
 ### Changed
 
@@ -79,10 +86,10 @@
   `docs/EXAM_ENGINE.md`, `docs/AUTHENTICATION.md`,
   `docs/COMMERCE_AND_PAYMENTS.md`, `docs/AI.md`, `docs/SECURITY.md`,
   `docs/DEPLOYMENT.md`, `docs/TESTING.md`, `docs/DECISIONS.md`
-  (ADR-001 through ADR-020), `docs/KNOWN_ISSUES.md`,
+  (ADR-001 through ADR-021), `docs/KNOWN_ISSUES.md`,
   `docs/DEVELOPMENT_STATUS.md`, and root `CLAUDE.md`.
 - `docs/DATABASE.md` rewritten to describe the as-built schema (migration
   order, integrity rules, seeding, and modeling decisions made where the
   spec was ambiguous).
 - `docs/AUTHENTICATION.md` rewritten for the as-built auth flow;
-  `docs/API.md` updated with implemented auth endpoint shapes.
+  `docs/API.md` updated with implemented auth and catalog endpoint shapes.

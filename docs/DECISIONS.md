@@ -516,3 +516,43 @@ Consequences:
 - Every authenticated request costs one extra `sessions` SELECT (plus a
   `users` lookup) — acceptable at this project's scale; revisit only if
   profiling shows it matters (no premature caching layer per ADR-015).
+
+---
+
+## ADR-021: One `catalog.*` Permission Family for Categories, Exams, and Series
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+Admin CRUD for `exam_categories`, `competitive_exams`, and `test_series`
+(Phase 4) is gated by four shared permission codes — `catalog.view`,
+`catalog.create`, `catalog.update`, `catalog.delete` — rather than a
+separate `category.*`/`exam.*`/`series.*` family per table (12 codes).
+
+Reason:
+Spec section 25 gives example permission codes per *feature area*
+(`question.*`, `test.*`, `product.*`, ...), not per table — and doesn't
+enumerate codes for categories/exams/series at all, leaving this an open
+choice (flagged in `docs/DEVELOPMENT_STATUS.md`'s Phase 3 "Next Recommended
+Task" as needing a decision). These three tables form one tightly nested
+hierarchy (category → exam → series) that the master spec itself groups
+under a single "EXAM CATALOG" section and a single phase ("Exam catalog").
+In practice the same admin/content-manager role edits all three together;
+splitting permissions per table would triple the permission count for no
+observed access-control benefit yet.
+
+Alternatives:
+Per-table codes (`category.view`, `exam.view`, `series.view`, ...) —
+rejected as premature; revisit if a real need emerges for a role that can
+edit exams but not categories, for example.
+
+Consequences:
+- Seeded via `src/seeders/20260913100007-catalog-permissions.js` (run after
+  the base `roles-and-permissions` seeder — permission codes can be added
+  incrementally in their own seeder files without editing an
+  already-applied one).
+- If test/question-builder phases (5/6) later introduce their own
+  `test.*`/`question.*`-scoped catalog-adjacent actions, keep `catalog.*`
+  scoped specifically to categories/exams/series — don't let it grow into a
+  catch-all.

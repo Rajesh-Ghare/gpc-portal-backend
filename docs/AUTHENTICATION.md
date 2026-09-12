@@ -91,8 +91,11 @@ Initial roles: `SUPER_ADMIN`, `ADMIN`, `STUDENT` (seeded — see
 `EXAM_MANAGER`, `CONTENT_EDITOR`, `SUPPORT`, `FINANCE`) must be addable by
 inserting rows, not by adding code branches.
 
-Permission codes currently seeded (20 total — the concrete examples from
-spec section 25; extend as each admin module is built):
+Permission codes currently seeded (24 total): the 20 concrete examples from
+spec section 25, plus 4 `catalog.*` codes added in Phase 4 for
+categories/exams/series admin CRUD (ADR-021 — one shared permission family
+for this tightly-nested hierarchy rather than a code per table). Extend as
+each further admin module is built.
 
 ```
 question.view, question.create, question.update, question.approve, question.reject
@@ -103,18 +106,21 @@ student.view
 attempt.view
 result.view, result.release
 ai.generate
+catalog.view, catalog.create, catalog.update, catalog.delete
 ```
 
 `requirePermission(code)` (`src/middleware/auth.ts`) resolves the current
 user's permissions via their roles (`req.currentUser.getRoles({ include:
 'permissions' })`) and rejects with `FORBIDDEN` if the code is absent. It
-must run *after* `authenticate` (which populates `req.currentUser`). No
-route uses it yet — the first admin-only route (Phase 4+) will be its first
-real caller; it has no dedicated test yet beyond type-checking, since there
-is no protected admin route to exercise it against. Services needing
-finer-grained, data-dependent checks (e.g. "is this the student's own
-attempt") should use a policy function, not inline role checks — no such
-policy exists yet (nothing has needed one before Phase 3).
+must run *after* `authenticate` (which populates `req.currentUser`).
+**Verified in Phase 4**: `src/api/v1/routes/catalog.routes.ts` is its first
+real caller (all 15 category/exam/series routes), and
+`tests/integration/catalog.test.ts` confirms both directions — a
+`catalog.*`-less user (STUDENT) gets `FORBIDDEN`, and SUPER_ADMIN (granted
+`catalog.*` via the seeders) succeeds. Services needing finer-grained,
+data-dependent checks (e.g. "is this the student's own attempt") should use
+a policy function, not inline role checks — no such policy exists yet
+(nothing has needed one before Phase 6/attempts).
 
 ## Session Model
 
