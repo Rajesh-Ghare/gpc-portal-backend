@@ -14,4 +14,11 @@
 
 ## Technical Debt
 
-(none — project just initialized)
+- **No automated test covers the database schema itself.** Phase 2's
+  migrations/constraints (the partial unique index on `attempts`, the
+  `product_items` CHECK constraint, full migrate-undo/reapply) were verified
+  manually against a real PostgreSQL database during that session, not via
+  an automated test that runs in CI. Add an integration test (Phase 3+) that
+  runs migrations against a scratch test database and asserts these
+  constraints actually reject bad data, so a future schema change can't
+  silently break them.

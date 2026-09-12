@@ -24,7 +24,13 @@ module.exports = tseslint.config(
     },
   },
   {
-    files: ['eslint.config.js', 'src/config/sequelize-cli.js'],
+    files: [
+      'eslint.config.js',
+      'src/config/sequelize-cli.js',
+      'src/migrations/**/*.js',
+      'src/seeders/**/*.js',
+      'src/utils/migrationHelpers.js',
+    ],
     rules: {
       '@typescript-eslint/no-require-imports': 'off',
     },

@@ -369,3 +369,103 @@ Consequences:
   calls it) require sequencing (typically backend merged/deployed first) and
   should be cross-referenced in commit messages/PR descriptions.
 - CI/CD, versioning, and release tagging are independent per repo.
+
+---
+
+## ADR-017: Migrations and Seeders Are Plain JavaScript (CommonJS), Not TypeScript
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+Files under `src/migrations/` and `src/seeders/` are plain `.js` (CommonJS),
+using `require('sequelize')` and raw `queryInterface` calls — not the
+project's TypeScript convention (ADR-003).
+
+Reason:
+`sequelize-cli` loads these files directly with `require()`; it does not run
+them through our TypeScript build or `tsx`. Adding a TypeScript compilation
+step (or a `ts-node`/`tsx` register hook) for one-off, throwaway migration
+scripts would be meaningful tooling complexity for very little benefit — a
+migration's `up`/`down` functions operate on raw `queryInterface`, not typed
+Sequelize models, so there is little type safety to gain. This matches the
+project owner's explicit "don't over-engineer the TypeScript setup"
+instruction (see ADR-003). `eslint.config.js` and
+`src/config/sequelize-cli.js` are the same kind of exception, for the same
+reason (tooling that a non-TS-aware process loads directly).
+
+Alternatives:
+Wire `tsx`/`ts-node` into `sequelize-cli` via `NODE_OPTIONS`/a register hook
+so migrations could be `.ts` — rejected as unnecessary complexity for
+one-shot scripts that don't benefit much from static typing.
+
+Consequences:
+- All new migrations/seeders must be added as `.js` files following the
+  existing pattern (see `src/utils/migrationHelpers.js` for shared column
+  helpers — deliberately kept outside `src/migrations/` since `sequelize-cli`
+  treats every file directly inside that folder as a migration).
+- Sequelize **models** (used by application code) remain TypeScript, per
+  ADR-003 — this exception is scoped narrowly to CLI-loaded tooling files.
+
+---
+
+## ADR-018: `product_items` Target Column Enforced by a Database CHECK Constraint
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+In addition to service-layer validation (required by spec section 17:
+"Validate that the appropriate target is supplied for the selected access
+type"), the `product_items` table has a Postgres `CHECK` constraint
+(`product_items_target_matches_access_type`) enforcing that exactly the
+column matching `access_type` is non-null (e.g. `access_type =
+'INDIVIDUAL_TEST'` requires `test_id IS NOT NULL` and the other three target
+columns `IS NULL`; `SUBSCRIPTION`/`ALL_ACCESS` require all four `IS NULL`).
+
+Reason:
+This invariant is fully expressible as a single-row CHECK constraint and is
+exactly the kind of data-integrity rule the database should enforce
+independently of application code — a bug in a future service-layer
+validator (or a direct SQL fix/import) cannot silently create an
+inconsistent `product_items` row. Verified against the real database: an
+`INSERT` with a mismatched target is rejected with a clear constraint-name
+error.
+
+Alternatives:
+Service-layer validation only — rejected as insufficient defense in depth for
+data that commerce/entitlement logic depends on being correct.
+
+Consequences:
+Any new `access_type` value (beyond `INDIVIDUAL_TEST`, `TEST_SERIES`,
+`EXAM_PACKAGE`, `SUBJECT_PACKAGE`, `SUBSCRIPTION`, `ALL_ACCESS`) requires a
+migration to update this CHECK constraint, not just an application-level enum
+change.
+
+---
+
+## ADR-019: Deferred Foreign Key for `questions.generation_job_id`
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+`questions.generation_job_id` is created as a plain nullable `UUID` column
+(no FK) in its own migration (`create-questions`), and a separate later
+migration (`add-fk-questions-generation-job`) adds the actual foreign-key
+constraint to `ai_generation_jobs.id`, once that table exists.
+
+Reason:
+The spec's migration order (section 20) places `questions` (#16) before
+`ai_generation_jobs` (#39) — `questions` cannot declare a FK to a table that
+doesn't exist yet. Splitting the FK into a follow-up migration preserves the
+given migration order exactly while still ending up with full referential
+integrity once all 43 migrations have run. Verified: both migrations run
+cleanly, and the full migration set was rolled back and reapplied end to end
+without error.
+
+Consequences:
+Anyone reading `create-questions.js` in isolation will see
+`generation_job_id` without a FK — the constraint only exists after
+`add-fk-questions-generation-job.js` also runs. This is called out in a code
+comment in `create-questions.js` and here.

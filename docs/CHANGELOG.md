@@ -20,6 +20,24 @@
   (`app/components/features/hooks/services/stores/questionTypes/utils/
   constants/validations/permissions`) and added `react-router-dom`,
   `@tanstack/react-query`, `zustand`, `axios`.
+- Full database schema: 43 migrations (pgcrypto + 41 tables + one deferred
+  FK) covering auth, exam catalog, question bank, test assembly, attempt
+  engine, results, commerce, AI, and system domains. Verified via a full
+  `migrate:undo:all` + `migrate` round trip against a real PostgreSQL
+  database.
+- 41 corresponding TypeScript Sequelize models (`src/models/`) with full
+  associations wired in `src/models/index.ts`.
+- A partial unique index preventing more than one `IN_PROGRESS` attempt per
+  user/test, and a `CHECK` constraint on `product_items` enforcing the
+  correct target column for each `access_type` — both verified against the
+  real database, not just written.
+- 6 development seeders providing roles/permissions, 3 sample users
+  (SUPER_ADMIN/ADMIN/STUDENT), SSC/SSC CGL catalog data, Quantitative
+  Aptitude subject/topics, 4 sample questions, 1 sample test, and 1 sample
+  product — all with working `down()` migrations.
+- Split `tsconfig.json` into a type-checking config (includes tests) and
+  `tsconfig.build.json` (production build, `src/` only), fixing a latent
+  `rootDir` conflict from Phase 1 that `tsc -p tsconfig.json` would have hit.
 
 ### Changed
 
@@ -40,8 +58,8 @@
 
 ### Database
 
-- No migrations yet — infrastructure only (Sequelize config wired, no tables
-  created). Full schema to be implemented in Phase 2.
+- Full schema implemented: 41 tables + `pgcrypto` extension. See
+  `docs/DATABASE.md` for the complete migration list and integrity rules.
 
 ### Documentation
 
@@ -50,5 +68,8 @@
   `docs/EXAM_ENGINE.md`, `docs/AUTHENTICATION.md`,
   `docs/COMMERCE_AND_PAYMENTS.md`, `docs/AI.md`, `docs/SECURITY.md`,
   `docs/DEPLOYMENT.md`, `docs/TESTING.md`, `docs/DECISIONS.md`
-  (ADR-001 through ADR-016), `docs/KNOWN_ISSUES.md`,
+  (ADR-001 through ADR-019), `docs/KNOWN_ISSUES.md`,
   `docs/DEVELOPMENT_STATUS.md`, and root `CLAUDE.md`.
+- `docs/DATABASE.md` rewritten to describe the as-built schema (migration
+  order, integrity rules, seeding, and modeling decisions made where the
+  spec was ambiguous).
