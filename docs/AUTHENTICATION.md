@@ -95,12 +95,14 @@ Permission codes currently seeded (28 total): the 20 concrete examples from
 spec section 25, plus 4 `catalog.*` codes added in Phase 4 for
 categories/exams/series admin CRUD (ADR-021), plus 4 `subject.*` codes added
 in Phase 5 for subjects/topics admin CRUD (ADR-022 — same "one shared family
-per nested hierarchy" reasoning). `question.*` (already seeded in Phase 1's
-baseline list) is the first phase-5-era family actually wired to routes —
-`view`/`create`/`update` gate the CRUD + versioning endpoints, `approve`/
-`reject` gate the review-workflow endpoints, and `update` is also reused to
-gate question deletion (no separate `question.delete` code exists — the
-spec's example list for `question.*` stops at approve/reject). Extend as
+per nested hierarchy" reasoning). `question.*` and `test.*` (both already
+seeded in Phase 1's baseline list) went unused until Phases 5 and 6
+respectively wired them to real routes — `view`/`create`/`update` gate the
+CRUD + versioning/section/rule endpoints, `approve`/`reject`/`validate`/
+`publish`/`close` gate their namesake workflow endpoints, and `update` is
+also reused to gate deletion for both families (no separate `question.delete`
+or `test.delete`/`test.archive` code exists — spec's example lists stop
+short of those; test archive reuses `test.close`, see ADR-024). Extend as
 each further admin module is built.
 
 ```

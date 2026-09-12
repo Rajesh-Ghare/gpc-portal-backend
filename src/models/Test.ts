@@ -1,4 +1,15 @@
-import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, Sequelize } from 'sequelize';
+import {
+  CreationOptional,
+  DataTypes,
+  InferAttributes,
+  InferCreationAttributes,
+  Model,
+  NonAttribute,
+  Sequelize,
+} from 'sequelize';
+import type { TestSection } from './TestSection';
+import type { TestQuestion } from './TestQuestion';
+import type { TestRule } from './TestRule';
 
 export class Test extends Model<InferAttributes<Test>, InferCreationAttributes<Test>> {
   declare id: CreationOptional<string>;
@@ -40,6 +51,10 @@ export class Test extends Model<InferAttributes<Test>, InferCreationAttributes<T
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
   declare deletedAt: CreationOptional<Date | null>;
+
+  declare sections?: NonAttribute<TestSection[]>;
+  declare testQuestions?: NonAttribute<TestQuestion[]>;
+  declare testRules?: NonAttribute<TestRule[]>;
 
   static associate(models: {
     CompetitiveExam: typeof import('./CompetitiveExam').CompetitiveExam;

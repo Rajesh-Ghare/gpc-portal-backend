@@ -62,6 +62,16 @@
   option). Approve/reject review workflow. First real use of `audit_logs`
   (`question.approve`/`.reject`/`.version_created`, per spec section 46).
   Verified manually and via 7 new integration tests.
+- Test builder admin CRUD: full test lifecycle
+  (DRAFT→PUBLISHED→CLOSED→ARCHIVED), sections, manual `test_questions`
+  assignment (rejects unapproved questions — first real use of
+  `QUESTION_NOT_APPROVED`), and `test_rules`/`test_rule_tags` (rule-based
+  selection config). A test's structure is only editable while `DRAFT`
+  (ADR-024). `validateTest()` checks MANUAL tests have questions and
+  RULE_BASED tests' rules are actually satisfiable against the real
+  approved-question pool; `publishTest()` runs it and persists the computed
+  totals. Extends `audit_logs` to `test.publish`/`test.close`. Verified
+  manually and via 5 new integration tests.
 
 ### Changed
 
@@ -99,12 +109,15 @@
   `docs/EXAM_ENGINE.md`, `docs/AUTHENTICATION.md`,
   `docs/COMMERCE_AND_PAYMENTS.md`, `docs/AI.md`, `docs/SECURITY.md`,
   `docs/DEPLOYMENT.md`, `docs/TESTING.md`, `docs/DECISIONS.md`
-  (ADR-001 through ADR-023), `docs/KNOWN_ISSUES.md`,
+  (ADR-001 through ADR-024), `docs/KNOWN_ISSUES.md`,
   `docs/DEVELOPMENT_STATUS.md`, and root `CLAUDE.md`.
 - `docs/DATABASE.md` rewritten to describe the as-built schema (migration
   order, integrity rules, seeding, and modeling decisions made where the
   spec was ambiguous).
 - `docs/AUTHENTICATION.md` rewritten for the as-built auth flow;
-  `docs/API.md` updated with implemented auth, catalog, and question-bank
-  endpoint shapes; `docs/SECURITY.md`'s Auditability section updated to
-  reflect the now-implemented (and intentionally scoped) audit logging.
+  `docs/API.md` updated with implemented auth, catalog, question-bank, and
+  test-builder endpoint shapes; `docs/SECURITY.md`'s Auditability section
+  updated to reflect the now-implemented (and intentionally scoped) audit
+  logging; `docs/EXAM_ENGINE.md`'s Question Selection Strategies section
+  updated to distinguish the now-implemented admin-side setup from the
+  still-planned attempt-time selection logic.

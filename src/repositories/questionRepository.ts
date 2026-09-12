@@ -42,3 +42,34 @@ export async function findQuestionDetail(id: string) {
   const latestVersion = await findLatestVersion(id);
   return { question, latestVersion };
 }
+
+export interface ApprovedPoolFilter {
+  subjectId?: string | null;
+  topicId?: string | null;
+  questionType?: string | null;
+  difficulty?: string | null;
+  tagIds?: string[];
+}
+
+/**
+ * Counts approved, published questions matching a rule's filters — used to
+ * check whether a test_rules row can actually be satisfied before a
+ * RULE_BASED test is allowed to publish. Tag filtering is "any of" (a
+ * question with at least one of the given tags matches), not "all of".
+ */
+export async function countApprovedQuestions(filter: ApprovedPoolFilter): Promise<number> {
+  const where: Record<string, unknown> = { status: 'PUBLISHED', reviewStatus: 'APPROVED' };
+  if (filter.subjectId) where.subjectId = filter.subjectId;
+  if (filter.topicId) where.topicId = filter.topicId;
+  if (filter.questionType) where.questionType = filter.questionType;
+  if (filter.difficulty) where.difficulty = filter.difficulty;
+
+  return Question.count({
+    where,
+    include:
+      filter.tagIds && filter.tagIds.length > 0
+        ? [{ association: 'tags', where: { id: filter.tagIds }, required: true }]
+        : [],
+    distinct: true,
+  });
+}

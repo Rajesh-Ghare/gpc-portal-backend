@@ -41,7 +41,8 @@ AUTH_OTP_INVALID, AUTH_OTP_EXPIRED, AUTH_UNAUTHORIZED
 
 CATEGORY_NOT_FOUND, EXAM_NOT_FOUND, SERIES_NOT_FOUND, DUPLICATE_SLUG
 
-TEST_NOT_FOUND, TEST_NOT_PUBLISHED, TEST_NOT_AVAILABLE, TEST_VALIDATION_FAILED
+TEST_NOT_FOUND, TEST_NOT_PUBLISHED, TEST_NOT_AVAILABLE, TEST_VALIDATION_FAILED,
+TEST_NOT_EDITABLE, TEST_INVALID_STATUS_TRANSITION
 
 ATTEMPT_NOT_FOUND, ATTEMPT_ALREADY_ACTIVE, ATTEMPT_EXPIRED,
 ATTEMPT_ALREADY_SUBMITTED, ATTEMPT_LIMIT_EXCEEDED
@@ -206,8 +207,71 @@ POST   /admin/questions/:id/reject       requires question.reject
 DELETE /admin/questions/:id              requires question.update (no separate question.delete code)
 ```
 
-Everything else in this section (tests, test sections, test rules, test
-validation, publish/close/archive, products, prices, orders, payments,
+#### Test Builder — Implemented (Phase 6)
+
+All routes require `Authorization: Bearer <token>` plus the named
+permission. A test's structure (sections/questions/rules/basic info) is only
+mutable while `status=DRAFT` (`errorCode TEST_NOT_EDITABLE`, 409, otherwise
+— see ADR-024). `test_sections` are hard-deleted (no `deleted_at` column);
+`tests` soft-deletes like other paranoid catalog entities.
+
+```
+GET    /admin/tests?competitiveExamId=&testSeriesId=&status=
+                                          requires test.view
+GET    /admin/tests/:testId              requires test.view
+                                          → test row + sections + testQuestions + testRules(+tags)
+POST   /admin/tests                      requires test.create
+                                          { competitiveExamId, testSeriesId?, title, slug?,
+                                            description?, instructions?, testType?, durationSeconds,
+                                            passingMarks?, defaultMarksPerQuestion?, defaultNegativeMarks?,
+                                            selectionMode? ('MANUAL'|'RULE_BASED'), randomizeQuestions?,
+                                            randomizeOptions?, attemptPolicy?, resultVisibility?,
+                                            showScore?, showCorrectAnswers?, showExplanations?,
+                                            showRank?, showPercentile?, availableFrom?, availableUntil?,
+                                            requiredLanguages? }
+PUT    /admin/tests/:testId              requires test.update  (DRAFT only; partial body)
+DELETE /admin/tests/:testId              requires test.update  (DRAFT only)
+GET    /admin/tests/:testId/validate     requires test.validate
+                                          → { valid, errors: string[], computedTotals: { totalQuestions, totalMarks } }
+POST   /admin/tests/:testId/publish      requires test.publish
+                                          Runs validate first (422 TEST_VALIDATION_FAILED with the
+                                          error list if invalid); on success sets status=PUBLISHED,
+                                          recomputes total_questions/total_marks from the actual
+                                          assembled content, audit-logged (action: test.publish)
+POST   /admin/tests/:testId/close        requires test.close
+                                          PUBLISHED → CLOSED only; audit-logged (action: test.close)
+POST   /admin/tests/:testId/archive      requires test.close (no separate test.archive code — ADR-024)
+                                          DRAFT or CLOSED → ARCHIVED only; NOT audit-logged
+
+GET    /admin/tests/:testId/sections            requires test.view
+POST   /admin/tests/:testId/sections            requires test.update (DRAFT only)
+                                                 { title, description?, displayOrder?, durationSeconds?,
+                                                   marksPerQuestion?, negativeMarks? }
+PUT    /admin/tests/:testId/sections/:id        requires test.update (DRAFT only; partial body)
+DELETE /admin/tests/:testId/sections/:id        requires test.update (DRAFT only)
+
+GET    /admin/tests/:testId/questions           requires test.view
+POST   /admin/tests/:testId/questions           requires test.update (DRAFT only)
+                                                 { questionId, questionVersionId?, sectionId?,
+                                                   displayOrder?, marks?, negativeMarks? }
+                                                 errorCode QUESTION_NOT_APPROVED if the question's
+                                                 reviewStatus isn't APPROVED; questionVersionId
+                                                 defaults to the question's latest version;
+                                                 marks/negativeMarks default to the version's own,
+                                                 falling back to the test's defaults
+DELETE /admin/tests/:testId/questions/:id       requires test.update (DRAFT only)
+
+GET    /admin/tests/:testId/rules               requires test.view
+POST   /admin/tests/:testId/rules               requires test.update (DRAFT only)
+                                                 { sectionId?, subjectId?, topicId?, questionType?,
+                                                   difficulty?, languageCode?, questionCount,
+                                                   selectionStrategy?, displayOrder?, ruleConfig?,
+                                                   tags?: string[] }
+PUT    /admin/tests/:testId/rules/:id           requires test.update (DRAFT only; partial body)
+DELETE /admin/tests/:testId/rules/:id           requires test.update (DRAFT only)
+```
+
+Everything else in this section (products, prices, orders, payments,
 students, attempts, results, AI generation, AI job status, settings) is
 planned but not yet implemented.
 

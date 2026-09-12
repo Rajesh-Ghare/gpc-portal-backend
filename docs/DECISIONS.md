@@ -638,3 +638,63 @@ Consequences:
   `version_number DESC`) — there is no endpoint yet to list or fetch a
   specific older version; add one if the admin UI needs a version history
   view.
+
+---
+
+## ADR-024: A Test's Structure Is Only Editable While `DRAFT`; Publish Auto-Computes Totals; Archive Reuses `test.close`
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+Three related rules for the test lifecycle (`src/services/testService.ts`):
+
+1. `ensureTestEditable()` rejects (`TEST_NOT_EDITABLE`, 409) any create/
+   update/delete on a test's basic info, sections, manual `test_questions`,
+   or `test_rules` unless `status === 'DRAFT'`. `PUBLISHED`/`CLOSED`/
+   `ARCHIVED` tests are structurally frozen — publish/close/archive are the
+   only mutations left.
+2. `publishTest()` runs `validateTest()` first (rejects with
+   `TEST_VALIDATION_FAILED` and the specific error list if invalid), then
+   **recomputes and overwrites** `tests.total_questions`/`total_marks` from
+   the actual assembled content (sum of `test_questions.marks` for MANUAL,
+   sum of `test_rules.question_count × default_marks_per_question` for
+   RULE_BASED) rather than trusting whatever the admin entered at test
+   creation.
+3. `POST /admin/tests/:id/archive` is gated by the existing `test.close`
+   permission — there is no separate `test.archive` code (spec's example
+   list for `test.*` stops at `close`). Archive is also **not**
+   audit-logged, unlike publish/close, since spec section 46 only lists
+   "test publication, test closure."
+
+Reason:
+(1) No attempts exist yet (Phase 7), so there's no live data this protects
+today — but a test's structure changing after `PUBLISHED` is exactly the
+kind of moving-target bug ADR-008 (attempt snapshotting) exists to prevent
+once attempts do exist, so the rule is put in place now rather than
+retrofitted later under time pressure. (2) `total_questions`/`total_marks`
+are read at attempt-creation time and shown to students before they start —
+they must reflect what's actually assembled, not a number an admin typed in
+before finishing the test. (3) Same "don't invent permission codes beyond
+spec's examples" discipline as ADR-018/ADR-022; archiving a test an admin
+already closed is a low-risk, rare action that doesn't need its own
+permission tier.
+
+Alternatives:
+Allow editing a `PUBLISHED` test's non-structural fields (title,
+description) — rejected for simplicity; revisit if this proves annoying in
+practice (typo fixes currently require no path other than close → can't
+reopen → would need a "revert to draft" action that doesn't exist).
+A `test.archive` permission — rejected per ADR-018/ADR-022 precedent.
+
+Consequences:
+- Verified: adding a section to a `PUBLISHED` test returns `409
+  TEST_NOT_EDITABLE`; publishing a test with an empty `test_questions`/
+  `test_rules` set returns `422 TEST_VALIDATION_FAILED` with the specific
+  reason; a `RULE_BASED` test's rule is checked against the real
+  `PUBLISHED`+`APPROVED` question pool via `countApprovedQuestions()`
+  (tag-filtered "any of" semantics) and rejected when the pool is too small.
+- If a future phase needs to support editing a published test (e.g. fixing
+  a typo without a full unpublish cycle), it should be a new, narrower
+  endpoint — not a loosening of `ensureTestEditable()`, which several other
+  services depend on for the DRAFT-only guarantee.

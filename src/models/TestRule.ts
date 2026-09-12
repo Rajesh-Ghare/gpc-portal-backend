@@ -1,4 +1,14 @@
-import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, Sequelize } from 'sequelize';
+import {
+  BelongsToManySetAssociationsMixin,
+  CreationOptional,
+  DataTypes,
+  InferAttributes,
+  InferCreationAttributes,
+  Model,
+  NonAttribute,
+  Sequelize,
+} from 'sequelize';
+import type { Tag } from './Tag';
 
 export class TestRule extends Model<InferAttributes<TestRule>, InferCreationAttributes<TestRule>> {
   declare id: CreationOptional<string>;
@@ -15,6 +25,9 @@ export class TestRule extends Model<InferAttributes<TestRule>, InferCreationAttr
   declare ruleConfig: CreationOptional<Record<string, unknown>>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
+
+  declare tags?: NonAttribute<Tag[]>;
+  declare setTags: BelongsToManySetAssociationsMixin<Tag, string>;
 
   static associate(models: {
     Test: typeof import('./Test').Test;

@@ -84,7 +84,19 @@ attempt must be safe (return the existing result, not create a duplicate).
 
 ## Question Selection Strategies
 
-`src/strategies/questionSelection/`:
+**Status**: the admin-side setup these strategies will consume is
+implemented (Phase 6) — `test_questions` (manual) and `test_rules`/
+`test_rule_tags` (rule-based) CRUD, plus `validateTest()`
+(`src/services/testService.ts`) which already checks a `RULE_BASED` test's
+rules against the real approved-question pool
+(`questionRepository.countApprovedQuestions()`) before allowing publish.
+**Not yet implemented**: the strategies themselves, which run at attempt
+*creation* (Phase 7) to actually resolve a `RULE_BASED` test's rules into a
+concrete, frozen set of `attempt_questions` — `countApprovedQuestions()`'s
+counting logic will need a sibling that also *selects* (not just counts)
+matching questions, respecting `selection_strategy` (e.g. `RANDOM`).
+
+`src/strategies/questionSelection/` (planned):
 
 - `ManualSelectionStrategy` — uses `test_questions` rows directly, in
   `display_order`.

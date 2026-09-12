@@ -5,6 +5,7 @@ import morgan from 'morgan';
 import { authRouter } from './api/v1/routes/auth.routes';
 import { catalogRouter } from './api/v1/routes/catalog.routes';
 import { questionBankRouter } from './api/v1/routes/questionBank.routes';
+import { testBuilderRouter } from './api/v1/routes/testBuilder.routes';
 import { env } from './config/env';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { sendSuccess } from './utils/apiResponse';
@@ -31,6 +32,7 @@ export function createApp() {
   apiRouter.use('/auth', authRouter);
   apiRouter.use('/admin', catalogRouter);
   apiRouter.use('/admin', questionBankRouter);
+  apiRouter.use('/admin', testBuilderRouter);
   app.use(env.apiBasePath, apiRouter);
 
   app.use(notFoundHandler);
