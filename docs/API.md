@@ -33,7 +33,7 @@ helper/error middleware — controllers must not hand-roll response shapes.
 
 ## Error Codes
 
-Centralized in `backend/src/constants/errorCodes.ts`. Canonical list (extend,
+Centralized in `src/errors/errorCodes.ts`. Canonical list (extend,
 don't duplicate, as new modules are built):
 
 ```
@@ -58,19 +58,29 @@ AI_JOB_NOT_FOUND, AI_GENERATION_FAILED
 FORBIDDEN, VALIDATION_ERROR, INTERNAL_ERROR
 ```
 
-## Endpoints (Planned per Spec — Status Tracked in DEVELOPMENT_STATUS.md)
+## Endpoints (Status Tracked in DEVELOPMENT_STATUS.md)
 
-None of these are implemented yet as of Phase 1. Listed here as the contract to
-build toward.
-
-### Auth
+### Auth — Implemented (Phase 3)
 
 ```
-POST /auth/request-otp
-POST /auth/verify-otp
-GET  /auth/me
-POST /auth/logout
+POST /auth/request-otp   { mobileNumber: string (10 digits) }
+                          → { mobileNumber, expiresAt }
+
+POST /auth/verify-otp    { mobileNumber: string, otp: string (6 digits) }
+                          → { token, user: { id, mobileNumber, fullName, status } }
+                          errorCode AUTH_OTP_EXPIRED  — no active OTP request found
+                          errorCode AUTH_OTP_INVALID  — wrong code, or attempt limit exceeded
+
+GET  /auth/me             (Authorization: Bearer <token>)
+                          → { id, mobileNumber, email, fullName, status, roles: string[] }
+                          errorCode AUTH_UNAUTHORIZED — missing/invalid/expired/revoked token
+
+POST /auth/logout         (Authorization: Bearer <token>)
+                          → {} — revokes the current session
 ```
+
+Everything else below is planned but not yet implemented; listed here as the
+contract to build toward.
 
 ### Student
 

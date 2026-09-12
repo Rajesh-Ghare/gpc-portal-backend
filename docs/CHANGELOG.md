@@ -38,6 +38,13 @@
 - Split `tsconfig.json` into a type-checking config (includes tests) and
   `tsconfig.build.json` (production build, `src/` only), fixing a latent
   `rootDir` conflict from Phase 1 that `tsc -p tsconfig.json` would have hit.
+- Mobile OTP authentication: `OtpProvider`/`MockOtpProvider`, `authService`
+  (request/verify OTP, find-or-create user with default STUDENT role, opaque
+  SHA-256-hashed session tokens), `authenticate`/`requirePermission`
+  middleware, and the `POST /auth/request-otp`, `POST /auth/verify-otp`,
+  `GET /auth/me`, `POST /auth/logout` routes. Verified manually against a
+  live server/database (including exhausting the OTP attempt limit) and via
+  5 new automated integration tests.
 
 ### Changed
 
@@ -47,6 +54,10 @@
   `CLAUDE.md`, and the root `README.md` moved from the shared parent folder
   into this repo; `gpc-portal-frontend` got its own short README pointing
   back here.
+- `src/config/env.ts` now appends `_test` to the database name under
+  `NODE_ENV=test`, matching `sequelize-cli.js`'s existing behavior — the app
+  and the CLI were previously inconsistent about which database
+  `NODE_ENV=test` pointed at.
 
 ### Fixed
 
@@ -68,8 +79,10 @@
   `docs/EXAM_ENGINE.md`, `docs/AUTHENTICATION.md`,
   `docs/COMMERCE_AND_PAYMENTS.md`, `docs/AI.md`, `docs/SECURITY.md`,
   `docs/DEPLOYMENT.md`, `docs/TESTING.md`, `docs/DECISIONS.md`
-  (ADR-001 through ADR-019), `docs/KNOWN_ISSUES.md`,
+  (ADR-001 through ADR-020), `docs/KNOWN_ISSUES.md`,
   `docs/DEVELOPMENT_STATUS.md`, and root `CLAUDE.md`.
 - `docs/DATABASE.md` rewritten to describe the as-built schema (migration
   order, integrity rules, seeding, and modeling decisions made where the
   spec was ambiguous).
+- `docs/AUTHENTICATION.md` rewritten for the as-built auth flow;
+  `docs/API.md` updated with implemented auth endpoint shapes.

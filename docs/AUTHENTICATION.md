@@ -1,35 +1,81 @@
 # Authentication & Authorization
 
+## Status
+
+**Implemented and verified (Phase 3)** against a real PostgreSQL database
+and via `tests/integration/auth.test.ts`: request-otp, verify-otp (with
+find-or-create user + default STUDENT role), `GET /auth/me`, `POST
+/auth/logout`, and rejection of unauthenticated requests.
+
 ## Authentication
 
-Primary method: **mobile number + OTP** (ADR-005).
+Primary method: **mobile number + OTP** (ADR-005). Session token format:
+**opaque bearer token, SHA-256 hashed** (ADR-020, not JWT).
 
-Flow:
+Flow (as implemented in `src/services/authService.ts`):
 
 ```
-POST /auth/request-otp { mobileNumber, purpose }
-  → OtpProvider.send() generates + sends OTP
-  → otp_requests row created with otp_hash (never the raw OTP), expires_at
+POST /auth/request-otp { mobileNumber }
+  → generateOtp() — 6-digit code
+  → hashOtp() — argon2 (see "Hashing Choices" below)
+  → OtpProvider.send(mobileNumber, otp) — MockOtpProvider in dev/test
+  → otp_requests row created (otp_hash, expires_at = now + OTP_EXPIRY_SECONDS,
+    purpose = 'LOGIN', provider, request_ip)
 
-POST /auth/verify-otp { mobileNumber, otp, purpose }
-  → verify against otp_hash + expiry + attempt_count
-  → find-or-create user
-  → create session (sessions.token_hash, not the raw token)
-  → issue JWT (or opaque session token — decide and record as an ADR before
-    Phase 3 if it changes from JWT) referencing the session
+POST /auth/verify-otp { mobileNumber, otp }
+  → findActiveOtpRequest(mobileNumber, 'LOGIN') — latest unverified,
+    unexpired row
+  → reject (AUTH_OTP_EXPIRED) if none found
+  → reject (AUTH_OTP_INVALID) if attempt_count >= OTP_MAX_ATTEMPTS
+  → verify otp against otp_hash (argon2.verify); on failure, increment
+    attempt_count and reject (AUTH_OTP_INVALID)
+  → markOtpVerified()
+  → findOrCreateUserByMobileNumber() — creates the user + assigns the
+    STUDENT role on first login; updates last_login_at/is_mobile_verified
+  → generateSessionToken() (32 random bytes, hex) + hashSessionToken()
+    (SHA-256) → sessions row created (token_hash, expires_at = now + 30 days,
+    ip_address, user_agent)
+  → raw token returned to the client once; never persisted or logged
+
+GET /auth/me, POST /auth/logout  (require `Authorization: Bearer <token>`)
+  → authenticate middleware hashes the presented token, looks up an active
+    (not revoked, not expired) session, loads the user + roles, attaches
+    req.currentUser / req.currentSession
+  → logout sets sessions.revoked_at = now()
 ```
+
+### Hashing Choices (see ADR-020 for full rationale)
+
+- **OTPs**: `argon2.hash()`/`argon2.verify()` — slow and salted, appropriate
+  because an OTP is drawn from a tiny keyspace (6 digits) and checked only a
+  handful of times per lifecycle. A fast unsalted hash would let an attacker
+  with DB read access brute-force all 1,000,000 possibilities instantly.
+- **Session tokens**: unsalted `SHA-256` — fast, appropriate because the raw
+  token is 256 bits of random entropy (unguessable regardless of hash speed)
+  and is checked on *every* authenticated request, where argon2's
+  deliberate slowness would be a real performance cost.
+
+Never swap these two.
 
 Rules:
 
-- Raw OTPs are never persisted; only a hash (`otp_hash`).
-- Raw session tokens are never persisted; only `token_hash`. The client holds
-  the raw token; the server can always revoke by clearing/expiring the session
-  row.
-- `otp_requests.attempt_count` and `expires_at` enforce rate limiting/expiry
-  server-side; never trust a frontend "OTP valid" claim.
-- `OTP_PROVIDER=mock` in development returns/logs a deterministic OTP so the
-  flow is testable without SMS costs — see `docs/DEPLOYMENT.md` /
-  `.env.example`.
+- Raw OTPs are never persisted or logged in plaintext by real providers;
+  only `otp_hash`. (`MockOtpProvider` *does* log the plaintext OTP to the
+  console and keep it in memory — this is explicitly a dev/test-only
+  provider, never wired into a production environment; see
+  `OTP_PROVIDER` in `.env.example`.)
+- Raw session tokens are never persisted; only `token_hash`. The client
+  holds the raw token; the server can always revoke by setting
+  `sessions.revoked_at`.
+- `otp_requests.attempt_count` (checked against `OTP_MAX_ATTEMPTS`, default
+  5) and `expires_at` (checked against `OTP_EXPIRY_SECONDS`, default 300)
+  enforce rate limiting/expiry server-side — verified by an integration test
+  that exhausts the attempt count and confirms even the correct OTP is then
+  rejected.
+- Purpose is currently always `'LOGIN'` (hardcoded server-side, not
+  client-supplied) — the `otp_requests.purpose` column exists to support
+  future purposes (e.g. mobile-number-change verification) without a schema
+  change.
 
 ## Authorization
 
@@ -40,12 +86,13 @@ checks.
 users --(user_roles)--> roles --(role_permissions)--> permissions
 ```
 
-Initial roles: `SUPER_ADMIN`, `ADMIN`, `STUDENT`. Future roles
-(`QUESTION_MANAGER`, `EXAM_MANAGER`, `CONTENT_EDITOR`, `SUPPORT`, `FINANCE`) must
-be addable by inserting rows, not by adding code branches.
+Initial roles: `SUPER_ADMIN`, `ADMIN`, `STUDENT` (seeded — see
+`docs/DATABASE.md` Seeding section). Future roles (`QUESTION_MANAGER`,
+`EXAM_MANAGER`, `CONTENT_EDITOR`, `SUPPORT`, `FINANCE`) must be addable by
+inserting rows, not by adding code branches.
 
-Example permission codes (extend as modules are built, keep centralized in
-`src/constants/permissions.ts`):
+Permission codes currently seeded (20 total — the concrete examples from
+spec section 25; extend as each admin module is built):
 
 ```
 question.view, question.create, question.update, question.approve, question.reject
@@ -58,12 +105,24 @@ result.view, result.release
 ai.generate
 ```
 
-A middleware (`requirePermission('test.publish')`) resolves the current user's
-permissions (via their roles) and rejects with `FORBIDDEN` if absent. Services
-needing finer-grained, data-dependent checks (e.g. "is this the student's own
-attempt") use a policy function, not inline role checks.
+`requirePermission(code)` (`src/middleware/auth.ts`) resolves the current
+user's permissions via their roles (`req.currentUser.getRoles({ include:
+'permissions' })`) and rejects with `FORBIDDEN` if the code is absent. It
+must run *after* `authenticate` (which populates `req.currentUser`). No
+route uses it yet — the first admin-only route (Phase 4+) will be its first
+real caller; it has no dedicated test yet beyond type-checking, since there
+is no protected admin route to exercise it against. Services needing
+finer-grained, data-dependent checks (e.g. "is this the student's own
+attempt") should use a policy function, not inline role checks — no such
+policy exists yet (nothing has needed one before Phase 3).
 
 ## Session Model
 
-`sessions` rows back server-side revocation (logout, admin-forced logout).
-`expires_at` + `revoked_at` are both checked on every authenticated request.
+`sessions` rows back server-side revocation (logout, admin-forced logout —
+the latter not yet implemented, needs an admin route in a later phase).
+`expires_at` + `revoked_at` are both checked on every authenticated request
+(`findActiveSessionByTokenHash` in `src/repositories/sessionRepository.ts`).
+Sessions currently last 30 days from creation (`SESSION_DURATION_MS` in
+`src/services/authService.ts`) — not yet configurable via environment
+variable; revisit if a shorter/longer default or per-role session length is
+needed.

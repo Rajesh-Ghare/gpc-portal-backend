@@ -469,3 +469,50 @@ Anyone reading `create-questions.js` in isolation will see
 `generation_job_id` without a FK — the constraint only exists after
 `add-fk-questions-generation-job.js` also runs. This is called out in a code
 comment in `create-questions.js` and here.
+
+---
+
+## ADR-020: Opaque Bearer Session Tokens (SHA-256 Hashed), Not JWT
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+`POST /auth/verify-otp` issues a high-entropy random token (32 bytes,
+hex-encoded) as the bearer credential, not a JWT. The raw token is returned
+to the client once and never stored; the server stores only
+`sha256(rawToken)` in `sessions.token_hash`. Every authenticated request
+looks up the session by that hash and checks `revoked_at IS NULL AND
+expires_at > now()`.
+
+Reason:
+`docs/AUTHENTICATION.md` (written in Phase 1) flagged this as a decision to
+make and record before Phase 3. A signed JWT's main advantage — verifying a
+request without a database round-trip — doesn't apply here: revocation
+(logout, admin-forced logout) requires checking the `sessions` table on
+every request regardless of token format, so a JWT would add signature
+verification and expiry-claim bookkeeping for no real benefit while
+duplicating state (the JWT's own `exp` vs. the `sessions.expires_at` row).
+An opaque token is simpler, and its 256 bits of entropy make it exactly as
+unguessable as a JWT's signature would make it unforgeable.
+
+`jsonwebtoken` remains an installed dependency (unused by this decision) in
+case a future need arises (e.g. short-lived tokens for a future third-party
+API integration) — it is not wired into the login flow.
+
+Alternatives:
+Signed JWT containing `{ sub: userId, sid: sessionId }` — rejected per above;
+would still require a DB hit per request to check revocation, so it doesn't
+avoid the cost it's usually chosen to avoid.
+
+Consequences:
+- `src/utils/authTokens.ts` documents why OTPs are hashed with argon2 (slow,
+  salted — appropriate for a tiny 6-digit keyspace checked only a few times)
+  while session tokens are hashed with unsalted SHA-256 (fast — appropriate
+  for a 256-bit random value checked on every request). Do not swap these:
+  using argon2 for session tokens would make every authenticated request
+  slow; using SHA-256 for OTPs would make the hash trivially reversible by
+  brute-forcing all 1,000,000 possible codes.
+- Every authenticated request costs one extra `sessions` SELECT (plus a
+  `users` lookup) — acceptable at this project's scale; revisit only if
+  profiling shows it matters (no premature caching layer per ADR-015).

@@ -1,4 +1,14 @@
-import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, Sequelize } from 'sequelize';
+import {
+  BelongsToManyGetAssociationsMixin,
+  CreationOptional,
+  DataTypes,
+  InferAttributes,
+  InferCreationAttributes,
+  Model,
+  NonAttribute,
+  Sequelize,
+} from 'sequelize';
+import type { Permission } from './Permission';
 
 export class Role extends Model<InferAttributes<Role>, InferCreationAttributes<Role>> {
   declare id: CreationOptional<string>;
@@ -8,6 +18,9 @@ export class Role extends Model<InferAttributes<Role>, InferCreationAttributes<R
   declare isSystemRole: CreationOptional<boolean>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
+
+  declare permissions?: NonAttribute<Permission[]>;
+  declare getPermissions: BelongsToManyGetAssociationsMixin<Permission>;
 
   static associate(models: {
     User: typeof import('./User').User;

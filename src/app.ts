@@ -2,6 +2,7 @@ import cors from 'cors';
 import express from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import { authRouter } from './api/v1/routes/auth.routes';
 import { env } from './config/env';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { sendSuccess } from './utils/apiResponse';
@@ -25,6 +26,7 @@ export function createApp() {
   apiRouter.get('/', (_req, res) => {
     sendSuccess(res, { name: 'GPC Exam Portal API', version: 'v1' });
   });
+  apiRouter.use('/auth', authRouter);
   app.use(env.apiBasePath, apiRouter);
 
   app.use(notFoundHandler);

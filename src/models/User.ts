@@ -1,4 +1,15 @@
-import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, Sequelize } from 'sequelize';
+import {
+  BelongsToManyAddAssociationMixin,
+  BelongsToManyGetAssociationsMixin,
+  CreationOptional,
+  DataTypes,
+  InferAttributes,
+  InferCreationAttributes,
+  Model,
+  NonAttribute,
+  Sequelize,
+} from 'sequelize';
+import type { Role } from './Role';
 
 export class User extends Model<InferAttributes<User>, InferCreationAttributes<User>> {
   declare id: CreationOptional<string>;
@@ -14,6 +25,10 @@ export class User extends Model<InferAttributes<User>, InferCreationAttributes<U
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
   declare deletedAt: CreationOptional<Date | null>;
+
+  declare roles?: NonAttribute<Role[]>;
+  declare getRoles: BelongsToManyGetAssociationsMixin<Role>;
+  declare addRole: BelongsToManyAddAssociationMixin<Role, string>;
 
   static associate(models: {
     Role: typeof import('./Role').Role;
