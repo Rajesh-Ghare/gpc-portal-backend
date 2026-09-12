@@ -46,6 +46,8 @@ TEST_NOT_FOUND, TEST_NOT_PUBLISHED, TEST_NOT_AVAILABLE, TEST_VALIDATION_FAILED
 ATTEMPT_NOT_FOUND, ATTEMPT_ALREADY_ACTIVE, ATTEMPT_EXPIRED,
 ATTEMPT_ALREADY_SUBMITTED, ATTEMPT_LIMIT_EXCEEDED
 
+SUBJECT_NOT_FOUND, TOPIC_NOT_FOUND
+
 QUESTION_NOT_FOUND, QUESTION_NOT_APPROVED, QUESTION_VERSION_INVALID,
 INVALID_OPTION
 
@@ -150,11 +152,64 @@ PUT    /admin/series/:id                 requires catalog.update  (partial body)
 DELETE /admin/series/:id                 requires catalog.delete
 ```
 
-Everything else in this section (subjects, topics, questions, question
-review, tests, test sections, test rules, test validation,
-publish/close/archive, products, prices, orders, payments, students,
-attempts, results, AI generation, AI job status, settings) is planned but
-not yet implemented.
+#### Question Bank — Implemented (Phase 5)
+
+All routes require `Authorization: Bearer <token>` plus the named
+permission. Subjects/topics soft-delete like the catalog entities above.
+
+```
+GET    /admin/subjects                   requires subject.view
+GET    /admin/subjects/:id               requires subject.view
+POST   /admin/subjects                   requires subject.create
+                                          { name, slug?, description?, isActive? }
+PUT    /admin/subjects/:id               requires subject.update  (partial body)
+DELETE /admin/subjects/:id               requires subject.delete
+
+GET    /admin/topics?subjectId=          requires subject.view
+GET    /admin/topics/:id                 requires subject.view
+POST   /admin/topics                     requires subject.create
+                                          { subjectId, parentTopicId?, name, slug?, description?, isActive? }
+                                          errorCode SUBJECT_NOT_FOUND; VALIDATION_ERROR if
+                                          parentTopicId belongs to a different subject
+PUT    /admin/topics/:id                 requires subject.update  (partial body)
+DELETE /admin/topics/:id                 requires subject.delete
+
+GET    /admin/questions?subjectId=&topicId=&status=&reviewStatus=
+                                          requires question.view
+GET    /admin/questions/:id              requires question.view
+                                          → { question: {...}, latestVersion: {...} }
+POST   /admin/questions                  requires question.create
+                                          { subjectId, topicId?, questionType?, difficulty?,
+                                            defaultLanguageCode?, tags?: string[],
+                                            marks?, negativeMarks?, explanation?, solutionSteps?,
+                                            translations: [{ languageCode, questionText, explanation?, solutionSteps? }],
+                                            options: [{ optionKey, isCorrect?, numericValue?,
+                                                        translations: [{ languageCode, optionText }] }] }
+                                          Creates the question + its version 1 + translations +
+                                          options + tags in ONE transaction (see ADR-023).
+                                          errorCode SUBJECT_NOT_FOUND / QUESTION_VERSION_INVALID
+                                          (e.g. MCQ_SINGLE without exactly one correct option)
+PUT    /admin/questions/:id              requires question.update
+                                          { subjectId?, topicId?, questionType?, difficulty?, tags? }
+                                          Metadata only — does NOT create a new version (ADR-023)
+POST   /admin/questions/:id/versions     requires question.update
+                                          Same body shape as the version-content fields of POST
+                                          /admin/questions above. Creates a new version, bumps
+                                          questions.version, writes an audit_logs row
+                                          (action: question.version_created)
+POST   /admin/questions/:id/approve      requires question.approve
+                                          → reviewStatus=APPROVED, status=PUBLISHED; audit-logged
+                                          (action: question.approve)
+POST   /admin/questions/:id/reject       requires question.reject
+                                          { reason?: string }
+                                          → reviewStatus=REJECTED; audit-logged (action: question.reject)
+DELETE /admin/questions/:id              requires question.update (no separate question.delete code)
+```
+
+Everything else in this section (tests, test sections, test rules, test
+validation, publish/close/archive, products, prices, orders, payments,
+students, attempts, results, AI generation, AI job status, settings) is
+planned but not yet implemented.
 
 ## Conventions
 

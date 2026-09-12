@@ -26,3 +26,16 @@
   environment variable (`SESSION_DURATION_MS = 30 days` in
   `src/services/authService.ts`). Fine for now; revisit if a product
   requirement needs a different or per-role session length.
+- **Only `MCQ_SINGLE` has real domain validation on create/version-create**
+  (`validateOptionsForType` in `src/services/questionService.ts` — exactly
+  one correct option, minimum 2 options). `MCQ_MULTI`, `TRUE_FALSE`,
+  `NUMERIC`, `SHORT_TEXT`, `LONG_TEXT` accept any option shape today,
+  including none at all — this matches spec section 42's explicit V1 scope
+  ("MCQ_SINGLE... don't build all future types now unless required"), but
+  means those types have no server-side sanity checking yet. Add validation
+  for each as its evaluation strategy is built (per `docs/EXAM_ENGINE.md`'s
+  evaluator-registry design).
+- **No admin endpoint to browse or pre-create tags.** Tags only come into
+  existence as a side effect of `tags: string[]` on a question payload
+  (ADR-022). Fine for V1; add `GET /admin/tags` if an admin UI ever needs a
+  tag picker independent of authoring a question.

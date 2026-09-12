@@ -556,3 +556,85 @@ Consequences:
   `test.*`/`question.*`-scoped catalog-adjacent actions, keep `catalog.*`
   scoped specifically to categories/exams/series — don't let it grow into a
   catch-all.
+
+---
+
+## ADR-022: `subject.*` Permission Family Covers Subjects and Topics; Tags Have No Standalone Permission
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+`subject.view`/`create`/`update`/`delete` gate both `subjects` and `topics`
+admin routes (topics are a subject-scoped nested resource, same reasoning as
+ADR-021's `catalog.*`). `tags` have no admin CRUD routes or permission codes
+at all — they're managed inline via `question.create`/`question.update`
+(a question's payload includes a `tags: string[]` array; the service
+find-or-creates each by name inside the question's own transaction).
+
+Reason:
+Same rationale as ADR-021: one nested hierarchy, one admin role, one
+permission family. For tags specifically, spec section 24's admin API list
+does not mention a standalone "tags" module at all — only
+categories/exams/series/subjects/topics/questions/question
+review/tests/.../settings — so inline management via the question payload
+is the more faithful reading, not a shortcut.
+
+Alternatives:
+Separate `topic.*` codes — rejected, same reasoning as ADR-021.
+Standalone `tag.*` CRUD endpoints — rejected as unrequested scope; revisit if
+tags need to be created/browsed independently of authoring a question (e.g.
+an admin tag-management screen), which would also need its own spec
+clarification since none exists today.
+
+Consequences:
+- `docs/AUTHENTICATION.md`'s permission list groups `subject.*` right after
+  `catalog.*` for the same "shared hierarchy" reason.
+- A tag can currently only be created as a side effect of creating or
+  editing a question that references it by name — there's no way to
+  pre-create an empty tag or browse the tag list independent of questions.
+
+---
+
+## ADR-023: Editing Question Content Creates a New Version; Editing Metadata Does Not
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+Two distinct write paths exist for an existing question:
+- `PUT /admin/questions/:id` — updates `questions` table metadata only
+  (`subjectId`, `topicId`, `questionType`, `difficulty`, `tags`) in place.
+  No new `question_versions` row, no audit log.
+- `POST /admin/questions/:id/versions` — creates a **new**
+  `question_versions` row (translations, options, marks) with
+  `version_number` = current max + 1, and bumps `questions.version`. Writes
+  an audit log (`question.version_created`) per spec section 46.
+
+There is deliberately no "edit this question's text in place" endpoint.
+
+Reason:
+ADR-007 (question versioning) exists specifically so an attempt can pin to
+an exact `question_version_id` and never have its content retroactively
+change after a student has already seen it. If editing a question's text
+mutated the existing `question_versions` row, that guarantee would be
+silently broken the moment any question used in a past attempt was edited.
+Metadata like which subject/topic a question is filed under, or its
+difficulty tag, isn't part of what a student sees during an attempt
+(`attempt_questions`/`test_questions` don't reference `subject_id`), so it's
+safe to edit in place without versioning it.
+
+Alternatives:
+A single "update question" endpoint that always creates a new version, even
+for a subject/topic re-file — rejected as needlessly bloating the version
+history for changes that carry no content-integrity risk.
+
+Consequences:
+- Client code (admin UI, Phase 13) must know which kind of edit it's making
+  and call the right endpoint — reclassifying a question's subject and
+  fixing a typo in its question text are two different API calls.
+- `GET /admin/questions/:id` always returns the question row plus its
+  *latest* version (`questionRepository.findLatestVersion`, ordered by
+  `version_number DESC`) — there is no endpoint yet to list or fetch a
+  specific older version; add one if the admin UI needs a version history
+  view.

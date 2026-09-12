@@ -52,6 +52,16 @@
   soft-delete. First real use of the `requirePermission` middleware
   (implemented in Phase 3, unused until now) — verified both directions via
   6 new integration tests.
+- Question bank admin CRUD: subjects/topics (`subject.*` permission family,
+  ADR-022), and a transactional question-authoring service that atomically
+  creates a question with its first version, translations, options, and
+  tags. Editing a question's content always creates a new version rather
+  than mutating one in place (ADR-023), preserving the guarantee that a
+  student's in-progress/completed attempt never sees content change
+  underneath it. MCQ_SINGLE options are validated (exactly one correct
+  option). Approve/reject review workflow. First real use of `audit_logs`
+  (`question.approve`/`.reject`/`.version_created`, per spec section 46).
+  Verified manually and via 7 new integration tests.
 
 ### Changed
 
@@ -65,6 +75,9 @@
   `NODE_ENV=test`, matching `sequelize-cli.js`'s existing behavior — the app
   and the CLI were previously inconsistent about which database
   `NODE_ENV=test` pointed at.
+- Integration tests now run sequentially (`vitest.config.mts` →
+  `fileParallelism: false`), fixing a race where test files sharing one real
+  database and the same seeded users could grab each other's OTP requests.
 
 ### Fixed
 
@@ -86,10 +99,12 @@
   `docs/EXAM_ENGINE.md`, `docs/AUTHENTICATION.md`,
   `docs/COMMERCE_AND_PAYMENTS.md`, `docs/AI.md`, `docs/SECURITY.md`,
   `docs/DEPLOYMENT.md`, `docs/TESTING.md`, `docs/DECISIONS.md`
-  (ADR-001 through ADR-021), `docs/KNOWN_ISSUES.md`,
+  (ADR-001 through ADR-023), `docs/KNOWN_ISSUES.md`,
   `docs/DEVELOPMENT_STATUS.md`, and root `CLAUDE.md`.
 - `docs/DATABASE.md` rewritten to describe the as-built schema (migration
   order, integrity rules, seeding, and modeling decisions made where the
   spec was ambiguous).
 - `docs/AUTHENTICATION.md` rewritten for the as-built auth flow;
-  `docs/API.md` updated with implemented auth and catalog endpoint shapes.
+  `docs/API.md` updated with implemented auth, catalog, and question-bank
+  endpoint shapes; `docs/SECURITY.md`'s Auditability section updated to
+  reflect the now-implemented (and intentionally scoped) audit logging.

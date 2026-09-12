@@ -64,6 +64,16 @@ changes, result release, role/permission changes, and any administrative
 override. Each entry records actor, action, entity, before/after data, IP,
 user agent, and a timestamp.
 
+**Implemented (Phase 5)**: `src/services/auditLogService.ts` — currently
+called from `question.approve`, `question.reject`, and
+`question.version_created` (`src/services/questionService.ts`), the only
+three question-bank actions spec section 46 calls out. Metadata-only
+question edits (`PUT /admin/questions/:id`) and every catalog/subject/topic
+CRUD action are deliberately **not** audited — they aren't in the spec's
+list. Follow this same "only the listed actions" discipline as later phases
+add test publish/close, price changes, entitlement changes, result release,
+and role/permission changes — don't audit-log everything by default.
+
 ## Secrets
 
 - Never commit real secrets. `.env` is git-ignored; `.env.example` documents
