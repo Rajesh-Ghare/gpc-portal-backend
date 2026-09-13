@@ -186,6 +186,12 @@
   (Student Frontend); fixed by eager-loading `question` alongside
   `questionVersion` in `attemptRepository.findAttemptWithQuestions()` and
   including `questionType` in the serialized response.
+- `GET /auth/me` never returned permission codes, only role codes — the
+  admin frontend's originally-documented permission-based UI helpers
+  (`docs/FRONTEND.md`'s `src/permissions/`) had nothing to read. Found
+  while starting Phase 13 (Admin Frontend); fixed by adding a flattened,
+  deduped `permissions: string[]` field, resolved the same way
+  `requirePermission()` already does but confined to this one endpoint.
 
 ### Security
 

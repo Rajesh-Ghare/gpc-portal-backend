@@ -81,7 +81,13 @@ POST /auth/verify-otp    { mobileNumber: string, otp: string (6 digits) }
                           errorCode AUTH_OTP_INVALID  — wrong code, or attempt limit exceeded
 
 GET  /auth/me             (Authorization: Bearer <token>)
-                          → { id, mobileNumber, email, fullName, status, roles: string[] }
+                          → { id, mobileNumber, email, fullName, status, roles: string[],
+                              permissions: string[] }
+                          permissions is the flattened, deduped set of permission
+                          codes across all the user's roles (added Phase 13, for the
+                          admin frontend's permission-based show/hide — see
+                          docs/AUTHENTICATION.md; still UX-only, every action is
+                          re-checked server-side via requirePermission)
                           errorCode AUTH_UNAUTHORIZED — missing/invalid/expired/revoked token
 
 POST /auth/logout         (Authorization: Bearer <token>)

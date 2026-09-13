@@ -49,12 +49,30 @@ describe('Auth flow', () => {
       .expect(200);
     expect(meRes.body.data.mobileNumber).toBe(MOBILE_LOGIN);
     expect(meRes.body.data.roles).toContain('STUDENT');
+    // STUDENT has no rows in role_permissions — permissions are purely
+    // additive per role, so a brand-new student gets an empty list.
+    expect(meRes.body.data.permissions).toEqual([]);
 
     await request(app).post('/api/v1/auth/logout').set('Authorization', `Bearer ${token}`).expect(200);
 
     const afterLogout = await request(app).get('/api/v1/auth/me').set('Authorization', `Bearer ${token}`);
     expect(afterLogout.status).toBe(401);
     expect(afterLogout.body.errorCode).toBe('AUTH_UNAUTHORIZED');
+  });
+
+  it('includes the flattened permission codes for an admin user', async () => {
+    const otp = await requestAndGetOtp('9000000001');
+    const verifyRes = await request(app)
+      .post('/api/v1/auth/verify-otp')
+      .send({ mobileNumber: '9000000001', otp })
+      .expect(200);
+    const meRes = await request(app)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${verifyRes.body.data.token}`)
+      .expect(200);
+    expect(meRes.body.data.roles).toContain('SUPER_ADMIN');
+    expect(meRes.body.data.permissions.length).toBeGreaterThan(0);
+    expect(meRes.body.data.permissions).toContain('question.approve');
   });
 
   it('rejects a request with no bearer token', async () => {

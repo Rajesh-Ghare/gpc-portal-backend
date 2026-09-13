@@ -186,6 +186,22 @@ processes routes in registration order, so a route added before a `.use()`
 never runs that middleware for its own path) — see
 `src/api/v1/routes/payment.routes.ts`.
 
+**`GET /auth/me` gained a `permissions: string[]` field in Phase 13**
+(flattened, deduped permission codes across all the user's roles) — added
+specifically so the admin frontend can conditionally show/hide UI per
+`docs/FRONTEND.md`'s originally-planned `src/permissions/` helpers, which
+had no way to work before this (only role *codes* were ever returned).
+Resolved the same way `requirePermission()` does
+(`user.getRoles({ include: [{ association: 'permissions' }] })`), but only
+on this endpoint — not added to the `authenticate` middleware's per-request
+user load, which would cost an extra join on every single API call for a
+value only the frontend's UI-gating needs. **This is still UX-only**: the
+frontend must never treat a permission's presence in this list as
+authorization to skip a server round-trip or assume an action will
+succeed — `requirePermission` server-side remains the actual enforcement,
+exactly as `docs/SECURITY.md` already states for the permissions list in
+general.
+
 ## Session Model
 
 `sessions` rows back server-side revocation (logout, admin-forced logout —

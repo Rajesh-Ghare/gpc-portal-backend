@@ -32,13 +32,21 @@ export async function verifyOtp(req: Request, res: Response) {
 
 export async function me(req: Request, res: Response) {
   const user = req.currentUser!;
+  // Permission codes aren't on the eager-loaded `user.roles` from the
+  // authenticate middleware (that would cost an extra join on every
+  // request) — fetched fresh here, the same way requirePermission()
+  // resolves them, since only this endpoint needs them.
+  const roles = await user.getRoles({ include: [{ association: 'permissions' }] });
+  const permissionCodes = [...new Set(roles.flatMap((role) => (role.permissions ?? []).map((p) => p.code)))];
+
   sendSuccess(res, {
     id: user.id,
     mobileNumber: user.mobileNumber,
     email: user.email,
     fullName: user.fullName,
     status: user.status,
-    roles: (user.roles ?? []).map((role) => role.code),
+    roles: roles.map((role) => role.code),
+    permissions: permissionCodes,
   });
 }
 
