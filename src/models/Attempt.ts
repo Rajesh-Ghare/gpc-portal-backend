@@ -8,6 +8,8 @@ import {
   Sequelize,
 } from 'sequelize';
 import type { AttemptQuestion } from './AttemptQuestion';
+import type { User } from './User';
+import type { Test } from './Test';
 
 export class Attempt extends Model<InferAttributes<Attempt>, InferCreationAttributes<Attempt>> {
   declare id: CreationOptional<string>;
@@ -29,6 +31,8 @@ export class Attempt extends Model<InferAttributes<Attempt>, InferCreationAttrib
   declare updatedAt: CreationOptional<Date>;
 
   declare attemptQuestions?: NonAttribute<AttemptQuestion[]>;
+  declare user?: NonAttribute<User>;
+  declare test?: NonAttribute<Test>;
 
   static associate(models: {
     User: typeof import('./User').User;

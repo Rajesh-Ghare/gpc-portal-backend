@@ -54,12 +54,15 @@
   type — a test isn't scoped to one subject, so "does this test belong to
   that subject package" has no defined rule (ADR-026). A `SUBJECT_PACKAGE`
   product/entitlement can be created but won't unlock any attempt today.
-- **`rank`/`percentile` are always `null`.** They're cross-attempt
-  aggregates (compare one student's score against everyone else's for the
-  same test) deliberately deferred to Phase 8 "Results" (ADR-027) — Phase
-  7's `submitAttempt()` only ever computes one attempt's own score. A test
-  with `show_rank`/`show_percentile` enabled will show these fields as
-  `null` until Phase 8 backfills them.
+- **`rank`/`percentile` require an explicit admin action to compute** —
+  they're never automatic. `POST /admin/tests/:testId/results/release`
+  (Phase 8, ADR-029) computes them for every evaluated result of a test,
+  but nothing triggers this on its own — e.g. for an `IMMEDIATE`-visibility
+  test where new students keep finishing over time, an admin must
+  re-call `release` periodically for `rank`/`percentile` to reflect
+  recent attempts (`released_at` itself won't change on a re-call, only
+  the rank/percentile values do). Consider a scheduled job if a test's
+  ranking needs to stay continuously fresh without manual action.
 - **`randomize_options` is not implemented.** The test config flag exists
   and is stored, but nothing shuffles an attempt's option display order —
   `GET /attempts/:id` always returns a question's options in their stored

@@ -1,4 +1,13 @@
-import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, Sequelize } from 'sequelize';
+import {
+  CreationOptional,
+  DataTypes,
+  InferAttributes,
+  InferCreationAttributes,
+  Model,
+  NonAttribute,
+  Sequelize,
+} from 'sequelize';
+import type { User } from './User';
 
 export class Result extends Model<InferAttributes<Result>, InferCreationAttributes<Result>> {
   declare id: CreationOptional<string>;
@@ -25,6 +34,8 @@ export class Result extends Model<InferAttributes<Result>, InferCreationAttribut
   declare metadata: CreationOptional<Record<string, unknown>>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
+
+  declare user?: NonAttribute<User>;
 
   static associate(models: {
     Attempt: typeof import('./Attempt').Attempt;

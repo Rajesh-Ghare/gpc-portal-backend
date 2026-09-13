@@ -138,10 +138,22 @@ student-facing attempt routes (`GET`/`PUT`/`POST .../attempts/:id...`) use
 `authenticate` (any logged-in user — no permission code, since a student
 has no `attempt.*` permission) plus this policy check, rather than
 `requirePermission`. `attempt.view` (already seeded) is reserved for the
-*admin* "view any student's attempt" use case, not yet built — do not
-confuse the two: a route either checks "is the caller an admin with this
-permission" or "does the caller own this specific record," never both
-loosely combined into one ad hoc check.
+*admin* "view any student's attempt" use case — do not confuse the two: a
+route either checks "is the caller an admin with this permission" or "does
+the caller own this specific record," never both loosely combined into one
+ad hoc check.
+
+**`attempt.view`, `result.view`, `result.release` wired in Phase 8** (all
+three already seeded in Phase 1's baseline list, unused until now — the
+same "activate a dormant permission" pattern as `question.*`/`test.*` in
+Phases 5/6): `GET /admin/attempts`, `GET /admin/attempts/:id`
+(`attempt.view`), `GET /admin/tests/:testId/results`,
+`GET /admin/results/:id` (`result.view`), and
+`POST /admin/tests/:testId/results/release` (`result.release`). The admin
+attempt/result views are **separate serializer functions** from the
+student-facing ones (`attemptAdminService.ts`/`resultService.ts` vs.
+`attemptService.ts`) — see ADR-030 for why a shared function with an
+`isAdmin` flag was deliberately rejected.
 
 ## Session Model
 

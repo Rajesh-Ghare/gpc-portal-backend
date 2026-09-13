@@ -110,7 +110,9 @@ BEGIN
   accumulate totals: attempted/correct/incorrect/unanswered, total/scored/
     negative marks, percentage, accuracy, time_taken_seconds
   create results row (released_at = now() if test.result_visibility is
-    IMMEDIATE, else null — see docs/DECISIONS.md ADR-027 re: rank/percentile)
+    IMMEDIATE, else null; rank/percentile always null here — they're a
+    cross-attempt aggregate computed separately, see "Rank & Percentile"
+    below and docs/DECISIONS.md ADR-027/ADR-029)
   create result_details rows (one per attempt_question)
   mark attempt SUBMITTED (submitted_at = now(), auto_submitted)
 COMMIT
@@ -119,6 +121,26 @@ COMMIT
 Scoring verified against a hand-checked case: 1 correct (1.00), 1 incorrect
 (−0.25 negative), 2 unanswered (0) → `percentage = (1 − 0.25) / 4 × 100 =
 18.75%`, `accuracyPercentage = 1/2 × 100 = 50%` — matched exactly.
+
+## Rank & Percentile — Implemented (Phase 8)
+
+`rank`/`percentile` are cross-attempt aggregates, deliberately **not**
+computed during `submitAttempt()` (ADR-027). They're computed by
+`POST /admin/tests/:testId/results/release` (`resultService.releaseResults`
+→ `src/utils/rankings.ts`'s `computeRankings`) — standard competition
+ranking (tied net scores share a rank; the next distinct score skips ahead
+by the number tied) and percentile = share of that test's evaluated
+attempts scoring strictly lower (ADR-029). This recomputes for *every*
+evaluated result each time it's called — safe and idempotent on the
+release-timestamp side (already-released results keep their original
+`released_at`), even though rank/percentile values are refreshed to
+reflect the full current set. Verified with 3 students (1 correct, 1
+wrong, 1 unanswered — the latter two tied at 0): top scorer got rank 1 /
+66.67th percentile, the tied pair both got rank 2 / 0th percentile.
+
+Until an admin calls this endpoint at least once, `show_rank`/
+`show_percentile` on a test will show `null` for both fields — this is the
+expected default, not a bug (see ADR-027).
 
 ## Question Selection Strategies — Implemented
 

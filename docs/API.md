@@ -60,7 +60,7 @@ ENTITLEMENT_NOT_FOUND, ENTITLEMENT_EXPIRED
 
 AI_JOB_NOT_FOUND, AI_GENERATION_FAILED
 
-USER_NOT_FOUND, RESULT_NOT_RELEASED
+USER_NOT_FOUND, RESULT_NOT_RELEASED, RESULT_NOT_FOUND
 
 FORBIDDEN, VALIDATION_ERROR, NOT_FOUND, INTERNAL_ERROR
 ```
@@ -326,9 +326,39 @@ POST /admin/entitlements                 requires entitlement.grant
 
 No list/browse/revoke endpoint yet — see `docs/KNOWN_ISSUES.md`.
 
+#### Attempts & Results (Admin View) — Implemented (Phase 8)
+
+Separate serializers from the student-facing attempt/result endpoints —
+these show correctness data (`is_correct`/`correct_option_id`) that a
+student is never shown for their own attempt. See ADR-030.
+
+```
+GET  /admin/attempts?testId=&userId=&status=  requires attempt.view
+                                               → summary list with user + test joined
+GET  /admin/attempts/:attemptId               requires attempt.view
+                                               → full attempt detail, INCLUDING correctness
+                                               errorCode ATTEMPT_NOT_FOUND
+
+GET  /admin/tests/:testId/results             requires result.view
+                                               → all results for the test (any release status),
+                                                 ordered by scoredMarks desc, with user joined
+GET  /admin/results/:id                       requires result.view
+                                               → { result, details: result_details[] } — full
+                                                 detail regardless of the test's show_* flags
+                                               errorCode RESULT_NOT_FOUND
+
+POST /admin/tests/:testId/results/release     requires result.release
+                                               → recomputes rank/percentile for every EVALUATED
+                                                 result (standard competition ranking — ties share
+                                                 a rank, ADR-029), releases (sets releasedAt) any
+                                                 not already released; safe to call repeatedly
+                                               → { totalResults, releasedCount, alreadyReleasedCount }
+                                               Audit-logged (action: result.release)
+```
+
 Everything else in this section (products, prices, full order/payment flow,
-students, results, AI generation, AI job status, settings) is planned but
-not yet implemented.
+students, AI generation, AI job status, settings) is planned but not yet
+implemented.
 
 ## Conventions
 

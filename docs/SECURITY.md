@@ -29,6 +29,16 @@ Serializers/DTOs for in-progress-attempt question payloads must explicitly
 whitelist safe fields rather than passing a full Sequelize model instance to
 `res.json()`.
 
+**Admin views are an intentional, separate exception** (Phase 8, ADR-030):
+`GET /admin/attempts/:id` and `GET /admin/results/:id` (`attempt.view`/
+`result.view` permission, not `attemptPolicy`) do return `is_correct`/full
+result detail — an admin reviewing a student's attempt for support or
+moderation is allowed to see everything. This is implemented as **entirely
+separate functions** (`attemptAdminService.ts`/`resultService.ts`'s admin
+functions) from the student-facing ones, not a shared function with an
+`isAdmin` flag — see ADR-030 for why a flag was rejected. Never make the
+student-facing path admin-aware; add a new admin-only function instead.
+
 **This was violated once, caught by manual testing, and fixed in Phase 7**:
 `createAttempt()`'s success response initially returned the raw eager-loaded
 Sequelize attempt (including `is_correct` on every option) instead of
@@ -79,11 +89,12 @@ own?").
       the attempt-creation request body, but there's no dedicated test
       asserting a forged field is ignored.
 - [x] **A student cannot call admin-only APIs** — verified across Phases
-      4–7 (`FORBIDDEN` from `requirePermission`).
+      4–8 (`FORBIDDEN` from `requirePermission`), including the new Phase 8
+      admin attempt/result/release endpoints.
 
 Unchecked items above are either not yet applicable (pricing) or are
 implied-but-not-separately-asserted — add explicit tests for them as the
-relevant phase (8 for results, 9 for pricing) makes them concrete.
+relevant phase (9 for pricing) makes them concrete.
 
 ## Auditability
 
@@ -93,17 +104,19 @@ changes, result release, role/permission changes, and any administrative
 override. Each entry records actor, action, entity, before/after data, IP,
 user agent, and a timestamp.
 
-**Implemented (Phases 5–7)**: `src/services/auditLogService.ts` — currently
+**Implemented (Phases 5–8)**: `src/services/auditLogService.ts` — currently
 called from `question.approve`, `question.reject`,
 `question.version_created` (`src/services/questionService.ts`),
-`test.publish`, `test.close` (`src/services/testService.ts`), and
-`entitlement.grant` (`src/services/entitlementService.ts`) — exactly the
-six question-bank/test/entitlement actions spec section 46 calls out so
+`test.publish`, `test.close` (`src/services/testService.ts`),
+`entitlement.grant` (`src/services/entitlementService.ts`), and
+`result.release` (`src/services/resultService.ts`) — exactly the seven
+question-bank/test/entitlement/result actions spec section 46 calls out so
 far. Metadata-only question edits, test archive, and every catalog/subject/
-topic/section/question-assignment/rule CRUD action are deliberately **not**
-audited — they aren't in the spec's list. Follow this same "only the listed
-actions" discipline as later phases add price changes, result release, and
-role/permission changes — don't audit-log everything by default.
+topic/section/question-assignment/rule/attempt-viewing CRUD or read action
+is deliberately **not** audited — they aren't in the spec's list. Follow
+this same "only the listed actions" discipline as later phases add price
+changes and role/permission changes — don't audit-log everything by
+default.
 
 ## Secrets
 

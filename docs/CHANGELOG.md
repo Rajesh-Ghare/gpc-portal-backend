@@ -89,6 +89,16 @@
   project owner's explicit request: uses the real `products`/
   `product_items`/`entitlements` tables, is idempotent, and is
   audit-logged. See ADR-025.
+- Results: rank/percentile computation (`src/utils/rankings.ts`, standard
+  competition ranking with ties, unit-tested) wired into an idempotent
+  `POST /admin/tests/:testId/results/release` admin action
+  (`result.release` permission, audit-logged). Admin browsing of any
+  student's attempts (`GET /admin/attempts`, `GET /admin/attempts/:id`,
+  `attempt.view`) and results (`GET /admin/tests/:testId/results`,
+  `GET /admin/results/:id`, `result.view`) built as deliberately separate
+  serializer functions from the student-facing ones — see ADR-030.
+  Verified with 3 real students producing a real tie (rank/percentile
+  matched by hand) and via 11 new tests (5 unit, 6 integration).
 
 ### Changed
 
@@ -136,18 +146,18 @@
   `docs/EXAM_ENGINE.md`, `docs/AUTHENTICATION.md`,
   `docs/COMMERCE_AND_PAYMENTS.md`, `docs/AI.md`, `docs/SECURITY.md`,
   `docs/DEPLOYMENT.md`, `docs/TESTING.md`, `docs/DECISIONS.md`
-  (ADR-001 through ADR-028), `docs/KNOWN_ISSUES.md`,
+  (ADR-001 through ADR-030), `docs/KNOWN_ISSUES.md`,
   `docs/DEVELOPMENT_STATUS.md`, and root `CLAUDE.md`.
 - `docs/DATABASE.md` rewritten to describe the as-built schema (migration
   order, integrity rules, seeding, and modeling decisions made where the
   spec was ambiguous).
 - `docs/AUTHENTICATION.md` rewritten for the as-built auth flow;
   `docs/API.md` updated with implemented auth, catalog, question-bank,
-  test-builder, exam-engine, and entitlement-grant endpoint shapes;
-  `docs/SECURITY.md`'s Auditability section and Required Security Test
-  Coverage checklist updated to reflect the now-implemented (and
-  intentionally scoped) audit logging and what's actually been tested;
-  `docs/EXAM_ENGINE.md` rewritten end to end for the as-built engine,
-  including the two bugs found during implementation;
-  `docs/COMMERCE_AND_PAYMENTS.md` updated for the implemented entitlement
-  resolution and admin-grant override.
+  test-builder, exam-engine, entitlement-grant, and admin results/attempts
+  endpoint shapes; `docs/SECURITY.md`'s Auditability section and Required
+  Security Test Coverage checklist updated to reflect the now-implemented
+  (and intentionally scoped) audit logging, what's actually been tested,
+  and the admin-view exception; `docs/EXAM_ENGINE.md` rewritten end to end
+  for the as-built engine, including the two bugs found during Phase 7 and
+  a new Rank & Percentile section; `docs/COMMERCE_AND_PAYMENTS.md` updated
+  for the implemented entitlement resolution and admin-grant override.

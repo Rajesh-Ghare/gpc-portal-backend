@@ -879,3 +879,107 @@ Consequences:
   *parent* query in the same call (they run as independent queries) — this
   hasn't been a limitation yet but will matter if a future query needs to
   filter attempt_questions by a nested option/translation property.
+
+---
+
+## ADR-029: Rank/Percentile Are Computed on `result.release`, Not Per-Submission, Using Standard Competition Ranking
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+`POST /admin/tests/:testId/results/release` (`result.release` permission)
+is the only thing that computes `rank`/`percentile`
+(`src/utils/rankings.ts`'s `computeRankings`, called from
+`resultService.releaseResults`). It:
+- Recomputes rank/percentile for **every** `EVALUATED` result of the test,
+  every time it's called (safe to call repeatedly as more students finish).
+- Uses **standard competition ranking** ("1224"): tied net scores
+  (`scoredMarks − negativeMarks`) share a rank, and the next distinct score
+  skips ahead by the number tied (two students tied for 1st → the next
+  gets rank 3, not 2).
+- Percentile = percentage of that test's evaluated attempts that scored
+  *strictly lower* — tied entries share the same percentile. A test with
+  exactly one evaluated result defines that result as the 100th percentile.
+- Sets `releasedAt = now()` only for results that don't already have one —
+  re-running never changes an already-released result's release timestamp,
+  even though its rank/percentile may shift as more attempts are evaluated.
+
+Reason:
+ADR-027 (Phase 7) already decided rank/percentile don't belong in
+`submitAttempt()` since they're a cross-attempt aggregate, not a
+per-attempt computation, and deferred the "how" to Phase 8. Recomputing on
+every release call (rather than trying to incrementally update as each
+new attempt lands) is simple, always internally consistent (every
+evaluated result at the time of the call gets a rank relative to the same
+full set), and cheap enough at this project's scale (a sort + linear pass
+over one test's results — verified correct with 3 students including a
+2-way tie). Competition ranking (not "dense" or "ordinal" ranking) is the
+convention most exam platforms and the general public expect from a
+"rank."
+
+Alternatives:
+Dense ranking (ties share a rank, next rank is rank+1, no skip) —
+rejected, less standard for competitive exam contexts, where a tie for
+1st conventionally means "there is no 2nd place."
+Incrementally updating ranks as each attempt submits — rejected per
+ADR-027's original reasoning: it would mean every existing student's rank
+changes (and needs re-persisting) every time anyone new finishes, which
+doesn't actually save work over a full recompute and adds complexity for
+no benefit.
+
+Consequences:
+- A test with `show_rank`/`show_percentile` enabled shows real values only
+  after an admin has called the release endpoint at least once — before
+  that, both are `null` (unchanged from ADR-027's default).
+- Calling `release` again after new attempts finish is the supported way
+  to refresh a "leaderboard" — there's no separate
+  "recompute-without-releasing" action; releasing is cheap and idempotent
+  enough on the release-timestamp side that this single action covers
+  both needs.
+
+---
+
+## ADR-030: Admin Attempt/Result Views Are Separate Code Paths From Student-Facing Ones
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+`src/services/attemptAdminService.ts`'s `getAttemptDetailForAdmin`/
+`listAttempts` and `resultService.ts`'s `getResultDetailForAdmin`/
+`listResultsForTest` are **separate functions** from
+`attemptService.getAttemptDetail`/`getResult` — not the same function
+reused with an `isAdmin` flag. The admin versions return the full
+eager-loaded data (including `is_correct`/`correct_option_id`), gated by
+`attempt.view`/`result.view` (permission-code, admin-only); the student
+versions stay exactly as strict as `docs/SECURITY.md` requires, gated by
+`attemptPolicy.ensureOwnsAttempt` (data-scoped, self-only).
+
+Reason:
+Phase 7 shipped, then caught and fixed, a real bug where attempt-creation's
+response accidentally used the wrong (unsanitized) code path and leaked
+correctness data. The lesson recorded then (`docs/EXAM_ENGINE.md`,
+`docs/SECURITY.md`) was "reuse the existing safe serializer, never
+eager-load-and-return directly" — but that lesson only holds if the
+*student* path is never asked to also serve the *admin* use case. A shared
+function with an `if (isAdmin)` branch is exactly the kind of code that
+silently regresses when someone adds a new field to the "admin-only"
+branch and it accidentally leaks through a code path reachable by a
+student. Two named, separately-tested functions make it structurally
+obvious which one a new route should call.
+
+Alternatives:
+One `getAttemptDetail(attemptId, { includeCorrectness: boolean })` —
+rejected: a boolean flag threaded through shared code is precisely the
+shape of bug this decision exists to avoid; a caller only has to get the
+flag wrong once.
+
+Consequences:
+- Any future admin-facing attempt/result endpoint must add to
+  `attemptAdminService.ts`/`resultService.ts`'s admin functions, not
+  extend the student-facing ones with new optional behavior.
+- The two families deliberately don't share a serializer helper even where
+  their output overlaps — some duplication is the accepted cost of keeping
+  the security-critical path (student-facing) simple enough to audit at a
+  glance.
