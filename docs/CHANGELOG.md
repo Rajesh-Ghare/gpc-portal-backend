@@ -144,6 +144,15 @@
   1, unused until now) is the only permission the module needs. Verified
   manually end-to-end (including confirming AI metadata never reaches a
   student-facing attempt payload) and via 6 new integration tests.
+- Student Frontend (Phase 12, code in the companion `gpc-portal-frontend`
+  repo): the full student journey against the real API — OTP login, test
+  browsing, the exam-taking UI (server-expiry-driven timer, question
+  navigator, a question-renderer registry per `docs/EXAM_ENGINE.md`),
+  results, a marketplace, and the order → mock-payment → entitlement
+  purchase flow. See `docs/FRONTEND.md` for the as-built structure and
+  `docs/DEVELOPMENT_STATUS.md` for this phase's full notes, including a
+  real-browser end-to-end verification pass that caught and fixed one
+  frontend bug (a broken "answered" counter).
 
 ### Changed
 

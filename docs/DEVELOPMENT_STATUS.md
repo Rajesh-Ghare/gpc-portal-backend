@@ -2,7 +2,8 @@
 
 ## Current Phase
 
-Phase 11 - AI (complete, verified against real PostgreSQL + automated tests)
+Phase 12 - Student Frontend (complete, verified against the real backend API
+via typecheck/lint/build and real-browser end-to-end automation)
 
 ## Overall Progress
 
@@ -17,98 +18,111 @@ Phase 11 - AI (complete, verified against real PostgreSQL + automated tests)
 - [x] Commerce
 - [x] Payments
 - [x] AI
-- [ ] Student frontend
+- [x] Student frontend
 - [ ] Admin frontend
 - [ ] Testing
 - [ ] Deployment
 
 ## Current Work
 
-Phase 11 is complete and verified. Awaiting user confirmation before
-starting Phase 12 (Student Frontend) — the backend's API surface is now
-functionally complete for the full student journey (browse → purchase →
-attempt → result) and the full admin authoring/review journey (catalog →
-question bank incl. AI-assisted → test builder → publish → results →
-commerce → payments), per `docs/API.md`.
+Phase 12 is complete and verified. Awaiting user confirmation before
+starting Phase 13 (Admin Frontend) — the full admin authoring/review
+surface (catalog, question bank incl. AI review, test builder, commerce,
+results, entitlements) already exists as a backend API (`docs/API.md`);
+this next phase builds the UI against it, in `gpc-portal-frontend`'s
+`src/features/admin/*` (per `docs/ARCHITECTURE.md`'s planned structure) and
+finally puts `src/permissions/` to real use.
 
-## Completed (Phase 11, this session)
+## Completed (Phase 12, this session)
 
-- **`AIService` interface** (`src/strategies/ai/AIService.ts`, ADR-006) —
-  `generateQuestions`, `translateQuestion`, `generateExplanation`,
-  `validateQuestion`, `classifyDifficulty`, matching `docs/AI.md`'s
-  original contract exactly. `MockAIProvider` implements all five with
-  deterministic, obviously-synthetic output; `src/strategies/ai/index.ts`'s
-  `getAIService()` factory is the only place that knows the `mock` name
-  (`AI_PROVIDER` env var) — same pattern as `OtpProvider`/`PaymentGateway`.
-  **Only `generateQuestions` is wired to an endpoint this phase** — the
-  other four complete the documented interface for a future phase to use.
-- **`POST /admin/ai/jobs`** (`src/services/aiService.ts`): validates
-  subject/topic, creates an `ai_generation_jobs` row, calls
-  `AIService.generateQuestions()` **synchronously** (the mock provider has
-  no real latency to hide behind a queue), creates one
-  `ai_generation_items` row per candidate (status `PENDING_REVIEW`), flags
-  `duplicateMatchQuestionId` via a simple exact-normalized-text match
-  against already-APPROVED questions in the same subject, and marks the
-  job `COMPLETED` — or `FAILED` with `errorCode AI_GENERATION_FAILED` (502)
-  if the provider itself throws.
-- **`GET /admin/ai/jobs?status=&subjectId=`, `GET /admin/ai/jobs/:jobId`**
-  (job + items).
-- **`POST /admin/ai/jobs/:jobId/items/:itemId/approve`**: creates a real
-  question through the *exact same* `questionService.createQuestion()`
-  transaction every manually-authored question uses (no parallel "AI
-  question" path — ADR-033), then immediately calls
-  `questionService.approveQuestion()` — the admin's approval of this item
-  *is* the mandatory human review ADR-011 requires, so there's no separate
-  second approval step. Stamps the new question with AI provenance
-  (`sourceType='AI_GENERATED'`, `generatedByAi=true`, `aiProvider`,
-  `aiModel`, `generationJobId`, `generationPromptVersion`, `generatedAt` —
-  `questions` columns that existed since Phase 2 but went unused until
-  now) via a new `aiMetadata` parameter on `createQuestion()` that is
-  **not** part of the public `createQuestionSchema`, so no
-  `POST /admin/questions` request can forge AI provenance (ADR-033).
-  Audited as `question.approve` (reused, not a new `ai.*` audit action).
-- **`POST /admin/ai/jobs/:jobId/items/:itemId/reject`** `{ reason? }`:
-  marks the item `REJECTED`, records the reason, creates no question. Not
-  separately audited (nothing was created/changed that spec section 46's
-  audit list calls out).
-- **Idempotency guard**: approving or rejecting an item not in
-  `PENDING_REVIEW` returns `VALIDATION_ERROR` (409) rather than silently
-  re-processing or double-counting `job.approvedCount`/`failedCount`.
-- **New permission activated**: `ai.generate` (already seeded in Phase 1's
-  baseline, unused until now — same "dormant code" pattern as
-  `question.*`/`test.*`/`product.*` before it). Unlike every other admin
-  module, one single permission gates the entire `/admin/ai/*` surface —
-  no `.view`/`.approve` split, since the module's scope doesn't warrant the
-  extra ceremony.
-- **No new error codes or migrations needed** — `AI_JOB_NOT_FOUND`,
-  `AI_GENERATION_FAILED`, and the `ai_generation_jobs`/`ai_generation_items`
-  tables were all already seeded/defined since Phase 1/2 and unused until
-  now.
-- Added `NonAttribute` association declarations needed for the new nested
-  includes: `AiGenerationJob.items`, `QuestionVersion.question`,
-  `QuestionTranslation.questionVersion` (used by the duplicate-detection
-  query, which joins translation → version → question).
+Code lives in the **`gpc-portal-frontend`** repo (this repo only gained one
+small enabling fix — see below). All work is against the real backend API;
+no mock/stub data layer exists anywhere in the frontend.
 
-### Testing
+- **App shell**: `src/app/{App.tsx,router.tsx,AppLayout.tsx,
+  ProtectedRoute.tsx,queryClient.ts}` — React Router route tree,
+  TanStack Query client, a shared header/nav layout, and a
+  `ProtectedRoute` that redirects to `/login` when there's no session
+  (every student route requires login per spec section 2 — there's no
+  public preview mode).
+- **API client** (`src/services/apiClient.ts`): one axios instance,
+  request interceptor attaching the bearer token, response interceptor
+  unwrapping the `{ success, data }` envelope and normalizing errors into
+  a typed `ApiError` (`errorCode`/`status`/`message`), and a 401 handler
+  that clears the local session so `ProtectedRoute` naturally redirects.
+- **Auth** (`src/features/auth/`): OTP request/verify flow, session
+  persisted via the one legitimate Zustand store
+  (`src/stores/authStore.ts`, `localStorage`-backed), a profile page with
+  logout.
+- **Test browsing** (`src/features/tests/`): published test list and a
+  detail page that folds in instructions + "Start test" (see
+  `docs/FRONTEND.md`'s Deviations section for why there's no separate
+  instructions route).
+- **Exam-taking UI** (`src/features/attempt/`) — the most complex piece:
+  a full-screen (no site nav) attempt page with a server-expiry-driven
+  countdown timer (`useCountdown`, ticks against the fixed `expiresAt`
+  the server issued, auto-submits on reaching zero), a question navigator
+  showing answered/marked/unvisited status, autosave on every answer
+  change (debounced for free-text/numeric types), mark-for-review, and a
+  confirm-before-submit action. `GET /attempts/:id`'s response is polled
+  every 20s while `IN_PROGRESS` as a resync safety net — the server
+  remains authoritative throughout, per `docs/EXAM_ENGINE.md`.
+- **Question renderer registry** (`src/questionTypes/`): implemented
+  exactly as documented in `docs/EXAM_ENGINE.md` — `MCQSingle`/`TrueFalse`
+  fully functional, `NUMERIC`/`SHORT_TEXT`/`LONG_TEXT` functional
+  free-text inputs, `MCQ_MULTI` honestly labeled as not-yet-scored (see
+  `docs/KNOWN_ISSUES.md`) rather than silently broken.
+- **Results** (`src/features/attempt/AttemptResultPage.tsx`): renders
+  whichever fields the test's `show_*` flags actually returned (per
+  `docs/API.md`'s conditional result shape), including rank/percentile
+  and per-question answer review when present.
+- **Marketplace + commerce** (`src/features/products/`,
+  `src/features/orders/`, `src/features/payments/`): product browsing,
+  an order-detail page that doubles as the checkout screen (create
+  payment → **mock-provider simulate success/failure buttons**, clearly
+  labeled as a dev-only mock provider control, calling the real
+  `POST /payments/:paymentId/simulate` — see `docs/COMMERCE_AND_PAYMENTS.md`),
+  and "my orders" history.
+- **Backend enabling fix** (this repo, `gpc-portal-backend`): `GET
+  /attempts/:id` never returned each question's `questionType`, which the
+  renderer registry needs. Fixed in `attemptRepository.ts`/
+  `attemptService.ts` — see this repo's own CHANGELOG "Fixed" entry and
+  `tests/integration/attempt.test.ts`'s new assertion. Found while
+  starting this phase, fixed and pushed as its own small commit before
+  frontend work began.
 
-- **6 new integration tests** (`tests/integration/ai.test.ts`): student
-  blocked from every AI route, job creation generating the requested item
-  count, full approve flow (question created + published + AI-provenance
-  fields asserted + job.approvedCount + audit log), reject flow (reason
-  recorded, no question created, job.failedCount), re-approving an
-  already-decided item rejected (409), and `findDuplicateQuestion` called
-  directly (unit-style, mirroring how `computeRankings` was tested in
-  Phase 8) asserting both a positive match (normalized case/whitespace-
-  insensitive) and a negative one.
-- Manually verified end-to-end against a live server/database first: job
-  creation, approve (question published, AI metadata fields confirmed via
-  `GET /admin/questions/:id`), reject, re-approve-rejected (409), and
-  student `FORBIDDEN` from `/admin/ai/*` — same discipline as every prior
-  phase.
+### Verification
+
+No frontend test runner exists yet (Phase 14). Verification for this phase:
+- `tsc -b` (TypeScript project references) — clean.
+- `oxlint` — clean (a few real warnings surfaced during development were
+  fixed, not suppressed: two "accessing a ref during render" issues in
+  `useCountdown`/`useDebouncedCallback` fixed by moving the ref sync into
+  an effect; a "components created during render" false positive for the
+  question-renderer lookup fixed by using `createElement` instead of
+  binding to a capitalized JSX-tag variable; an unnecessary `useMemo`
+  dependency removed).
+- `vite build` — clean production build.
+- **Real browser end-to-end verification** driven via the Chrome DevTools
+  Protocol against the live backend + live Vite dev server (see
+  `docs/FRONTEND.md`'s Manual/Automated Verification section for the exact
+  method — no Playwright/Puppeteer in this project, a small uncommitted
+  Node script using native `fetch`/`WebSocket` against headless Edge).
+  Covered, with real DOM events: OTP login → session persisted →
+  marketplace → buy → mock payment → entitlement granted → test list →
+  start attempt → answer a question (confirmed no correctness data in the
+  rendered DOM) → submit → correct computed score on the result page.
+  **This caught and fixed one real bug**: the attempt page's "N of M
+  answered" counter counted every question as answered regardless of
+  whether it had actually been touched, due to an unguarded optional-chain
+  comparison (`q.answer?.numericAnswer !== null` is `true` when `q.answer`
+  itself is `null`) — fixed by extracting a single `isQuestionAnswered()`
+  helper shared by the two places that needed this check, so they can't
+  diverge again.
 
 ## In Progress
 
-Nothing — Phase 11 scope is complete.
+Nothing — Phase 12 scope is complete.
 
 ## Blocked
 
@@ -116,22 +130,20 @@ None.
 
 ## Known Issues
 
-Updated this phase (see `docs/KNOWN_ISSUES.md`): added "AI generation runs
-synchronously, no job queue," "only generateQuestions is wired to an
-endpoint," "duplicate detection is exact-text-match only, scoped to one
-subject," and "no bulk approve/reject."
+Updated this phase (see `docs/KNOWN_ISSUES.md`): cross-referenced the
+existing "only MCQ_SINGLE has real domain validation" item with how the
+Phase 12 frontend surfaces that limitation honestly rather than hiding it.
 
 ## Next Recommended Task
 
-Phase 12: Student Frontend. The backend's full student-facing surface now
-exists: auth (OTP), catalog/test browsing, product browsing, order
-creation, payment (mock) + entitlement, attempt lifecycle (create/answer/
-submit/result), all documented in `docs/API.md`. Build the React/Vite
-frontend's student-facing screens against this real API — no backend
-placeholder/mock data layer should be needed. Confirm `docs/FRONTEND.md`'s
-Phase-1-era plan still matches the as-built API shapes before writing
-components; update it where the two have diverged (e.g. exact response
-envelopes, error codes actually returned).
+Phase 13: Admin Frontend. The backend's admin API surface is already
+complete (catalog, question bank + AI review, test builder, commerce,
+payments browsing, results, entitlements — all of `docs/API.md`'s
+`/admin/*` routes). Build `gpc-portal-frontend`'s admin UI against it,
+following the same "real API, no mocks" discipline as Phase 12, and
+finally populate `src/permissions/` with real permission-code-based
+show/hide helpers (still UX-only — every action stays re-checked
+server-side).
 
 ## Last Updated
 
@@ -139,84 +151,76 @@ envelopes, error codes actually returned).
 
 ## Last Development Session
 
-Implemented and verified Phase 11 (AI): an `AIService` interface (ADR-006)
-with a `MockAIProvider`, a synchronous admin-triggered generation-job
-workflow (`ai_generation_jobs`/`ai_generation_items`, tables that existed
-since Phase 2 but were unused), and a review step where approving a
-generated item routes through the exact same `questionService.
-createQuestion()`/`approveQuestion()` path a manually-authored question
-uses (ADR-033) — no parallel "AI question" table or endpoint family, and
-AI provenance is passed through an internal-only parameter that no client
-request can forge. A simple exact-text duplicate-detection check flags
-likely-repeat generations without adding a new dependency. Verified
-end-to-end manually (job → approve → published question with AI metadata
-→ confirmed absent from any student-facing attempt payload) and via 6 new
-integration tests (70 total, all passing).
+Implemented and verified Phase 12 (Student Frontend) in the
+`gpc-portal-frontend` repo: the full student journey (OTP login → browse
+tests/products → purchase via mock payment → take an exam with a
+server-authoritative timer and a question-renderer registry → view
+results) built against the real backend API with no mock data layer.
+Found and fixed one small backend gap along the way (`questionType`
+missing from the attempt-detail response) and one frontend bug (a broken
+"answered" counter) — the latter caught specifically by driving a real
+browser through the full flow via the Chrome DevTools Protocol, not by
+typechecking or a build succeeding. Full verification: `tsc -b`, `oxlint`,
+`vite build`, and that real-browser walkthrough, all clean.
 
 ## Important Files Changed
 
-- `src/strategies/ai/{AIService.ts,MockAIProvider.ts,index.ts}` (created)
-- `src/repositories/aiRepository.ts` (created)
-- `src/services/aiService.ts` (created)
-- `src/services/questionService.ts` (modified — `createQuestion()` gained
-  an optional `aiMetadata` parameter, `AiSourceMetadata` interface)
-- `src/validations/ai.validation.ts` (created)
-- `src/controllers/aiController.ts` (created)
-- `src/api/v1/routes/ai.routes.ts` (created)
-- `src/app.ts` (modified — mounts `aiRouter`)
-- `src/models/{AiGenerationJob.ts,QuestionVersion.ts,QuestionTranslation.ts}`
-  (modified — `NonAttribute` association declarations)
-- `tests/integration/ai.test.ts` (created)
-- `docs/AI.md` (rewritten for the as-built workflow), `docs/API.md`,
-  `docs/AUTHENTICATION.md`, `docs/SECURITY.md`, `docs/DECISIONS.md`
-  (ADR-033), `docs/KNOWN_ISSUES.md`, `docs/CHANGELOG.md`
+**`gpc-portal-backend`** (this repo):
+- `src/repositories/attemptRepository.ts`, `src/services/attemptService.ts`
+  (modified — `questionType` in the attempt-detail response)
+- `tests/integration/attempt.test.ts` (modified — new assertion)
+- `docs/API.md`, `docs/EXAM_ENGINE.md`, `docs/CHANGELOG.md` (the
+  `questionType` fix); `docs/FRONTEND.md` (rewritten for the as-built
+  frontend), `docs/KNOWN_ISSUES.md`, `docs/DEVELOPMENT_STATUS.md` (this
+  file)
+
+**`gpc-portal-frontend`** (companion repo — see its own `README.md`):
+- `src/app/*`, `src/services/apiClient.ts`, `src/stores/authStore.ts`,
+  `src/hooks/*`, `src/utils/*`, `src/components/*` (foundation)
+- `src/questionTypes/*` (renderer registry)
+- `src/features/{auth,tests,attempt,products,orders,payments}/*`
+- `src/index.css` (full app stylesheet, mobile-first)
+- Removed: default Vite template (`App.tsx`/`App.css`, template assets)
 
 ## Database Changes
 
-None — Phase 11 used the existing `ai_generation_jobs`/`ai_generation_items`
-tables and the `questions` table's AI-provenance columns, all from Phase 2,
-as-is. No new migrations, no new seeders (`ai.generate` was already seeded
-in Phase 1's baseline).
+None.
 
 ## API Changes
 
-Added (see `docs/API.md` for full request/response shapes):
-- `GET /admin/ai/jobs`, `GET /admin/ai/jobs/:jobId`
-- `POST /admin/ai/jobs`
-- `POST /admin/ai/jobs/:jobId/items/:itemId/approve`
-- `POST /admin/ai/jobs/:jobId/items/:itemId/reject`
+None new — Phase 12 consumes the existing student-facing API surface.
+One response-shape addition: `GET /attempts/:attemptId`'s per-question
+objects now include `questionType` (see `docs/API.md`).
 
 ## Testing Status
 
-- `tests/unit/app.test.ts` — 1 test (`/health`).
-- `tests/unit/rankings.test.ts` — 5 tests (Phase 8).
-- `tests/integration/auth.test.ts` — 5 tests (Phase 3).
-- `tests/integration/catalog.test.ts` — 6 tests (Phase 4).
-- `tests/integration/questionBank.test.ts` — 7 tests (Phase 5).
-- `tests/integration/testBuilder.test.ts` — 5 tests (Phase 6).
-- `tests/integration/attempt.test.ts` — 5 tests (Phase 7).
-- `tests/integration/results.test.ts` — 6 tests (Phase 8).
-- `tests/integration/commerce.test.ts` — 14 tests (Phase 9).
-- `tests/integration/payment.test.ts` — 10 tests (Phase 10).
-- `tests/integration/ai.test.ts` — 6 tests (this phase).
-- Total: 70 tests, all passing against the real test database.
-- Still open: same items as Phase 9/10 (see `docs/KNOWN_ISSUES.md`), plus
-  the new AI-specific gaps noted above.
+Backend: unchanged at 70 tests (one assertion added to
+`tests/integration/attempt.test.ts`, no new test files — see this repo's
+own testing status history). Frontend: no test runner yet (Phase 14);
+this phase's verification was typecheck + lint + build + real-browser
+end-to-end walkthroughs, detailed above.
 
 ## Handover Notes
 
-- **Never add `sourceType`/`generatedByAi`/`aiProvider`/etc. as
-  client-settable fields on `createQuestionSchema`.** They exist on
-  `createQuestion()`'s internal `aiMetadata` parameter specifically so no
-  request body can forge AI provenance — see ADR-033.
-- **`aiService.approveItem()` is the only place that should ever call
-  `questionService.createQuestion()` with `aiMetadata` set.** Any future
-  AI-adjacent feature (e.g. bulk import) needing its own provenance should
-  extend `AiSourceMetadata`'s shape, not bypass this rule.
-- **AI generation is currently synchronous** — if a real (non-mock)
-  `AIService` is ever wired up and its calls are slow, `createGenerationJob()`
-  will need to change from awaiting the provider inline to a real background
-  job using the `ai_generation_jobs.status = 'PROCESSING'` state that
-  already exists but is currently only ever observed transiently.
+- **The frontend has zero mock/stub data.** Every screen calls the real
+  backend. If a future session is tempted to add fixture data for faster
+  iteration, don't — it's exactly the kind of thing that silently drifts
+  from the real API shape.
+- **`isQuestionAnswered()`** (`gpc-portal-frontend`'s
+  `src/features/attempt/utils.ts`) is the single source of truth for "does
+  this question have a saved answer" — never re-derive this inline with an
+  unguarded optional-chain comparison again (see the bug this phase found
+  and fixed).
+- **`MCQ_MULTI` is intentionally not fully functional** on either side of
+  the stack yet — see `docs/KNOWN_ISSUES.md`. Don't "fix" the frontend
+  without also building the backend's real multi-select answer column and
+  evaluator; they need to land together.
+- **No Playwright/Puppeteer is installed in this project.** The real-browser
+  verification method used this phase (a small Node script driving a
+  headless Edge instance via the Chrome DevTools Protocol) was not
+  committed anywhere — if a future phase wants repeatable browser
+  end-to-end tests, that's a deliberate Phase 14 (Testing) decision to make
+  (which tool, whether to commit the harness), not something to
+  half-adopt ad hoc.
 - Read `CLAUDE.md` and this file first in any new session before writing
   code.

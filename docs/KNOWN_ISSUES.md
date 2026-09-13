@@ -43,7 +43,10 @@
   `submitAttempt()`'s evaluator registry (`src/strategies/evaluation/`)
   silently scores it `UNANSWERED`/0 rather than crashing, since no real
   evaluator exists for it yet. Add both the creation-time validation and the
-  real evaluator together, per type, as each is actually built.
+  real evaluator together, per type, as each is actually built. The Phase
+  12 frontend's `MCQ_MULTI` renderer surfaces this honestly (an on-screen
+  note that scoring isn't available yet) rather than pretending it works —
+  see `gpc-portal-frontend`'s `src/questionTypes/MCQMulti.tsx`.
 - **No admin endpoint to browse or pre-create tags.** Tags only come into
   existence as a side effect of `tags: string[]` on a question payload
   (ADR-022). Fine for V1; add `GET /admin/tags` if an admin UI ever needs a
