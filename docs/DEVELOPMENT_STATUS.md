@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 9 - Commerce (complete, verified against real PostgreSQL + automated tests)
+Phase 10 - Payments (complete, verified against real PostgreSQL + automated tests)
 
 ## Overall Progress
 
@@ -15,7 +15,7 @@ Phase 9 - Commerce (complete, verified against real PostgreSQL + automated tests
 - [x] Exam engine
 - [x] Results
 - [x] Commerce
-- [ ] Payments
+- [x] Payments
 - [ ] AI
 - [ ] Student frontend
 - [ ] Admin frontend
@@ -24,79 +24,93 @@ Phase 9 - Commerce (complete, verified against real PostgreSQL + automated tests
 
 ## Current Work
 
-Phase 9 is complete and verified. Awaiting user confirmation before starting
-Phase 10 (Payments: `PaymentGateway` interface + mock provider, webhook
-verification, order → PAID transition, entitlement creation from a paid
-order's product).
+Phase 10 is complete and verified. Awaiting user confirmation before
+starting Phase 11 (AI: `AIService` interface + mock provider, AI-assisted
+question generation jobs, admin review of generated questions before they
+enter the normal question-bank approval flow).
 
-## Completed (Phase 9, this session)
+## Completed (Phase 10, this session)
 
-- **Admin product/price/item CRUD** (`src/services/productService.ts`,
-  extending — not replacing — Phase 7's deliberately narrow
-  `productRepository.ts`, per ADR-025's explicit handover note): full
-  create/list/get/update/soft-delete for products; create/list/update/
-  delete for prices; create/list/delete for items. Slug auto-generation +
-  duplicate-slug rejection, matching the catalog/question/test pattern.
-  Every price create/update/delete writes an `audit_logs` row (action
-  `product.price_changed`) — the ninth spec-section-46 action now covered.
-- **Product-item target validation duplicated at the service layer**
-  (`src/validations/product.validation.ts`'s `createProductItemSchema`),
-  matching the DB `CHECK` constraint from ADR-018 rule-for-rule, per the
-  spec's explicit "validate at the application layer too" requirement.
-  Verified both a passing SUBSCRIPTION item (no target columns) and a
-  rejected EXAM_PACKAGE-with-testId mismatch.
-- **Student-facing product browsing** (`src/services/productBrowseService.ts`,
-  `GET /products`, `GET /products/:productId`) — ACTIVE + `isActive` products
-  only, mirroring `testBrowseService.ts`'s published-test scoping.
-- **Order creation** (`src/services/orderService.ts`, `POST /orders`):
-  one order = one product, snapshotting the product's name and current
-  active `product_price` into a single `order_items` row
-  (`product_item_id = null` — see ADR-031 for why per-product, not
-  per-`product_item`). Idempotent on `(userId, idempotencyKey)`: a repeat
-  with the same `productId` returns the existing order (200); a repeat with
-  a *different* `productId` is rejected as `IDEMPOTENCY_CONFLICT` (409).
-  `GET /orders` (own orders) and `GET /orders/:orderId`
-  (`orderPolicy.ensureOwnsOrder`, `errorCode FORBIDDEN` cross-student) round
-  out the student flow; `GET /admin/orders`/`GET /admin/orders/:orderId`
-  (`order.view`) give admin browsing.
-- **Closed the Phase 7 (ADR-025) entitlement gap**: `GET /admin/entitlements`
-  (`entitlement.view`, filterable by `userId`/`status`/`productId`) and
-  `DELETE /admin/entitlements/:id` (`entitlement.grant`, sets
-  `status=REVOKED`/`revokedAt`, idempotent — re-revoking is a no-op with no
-  duplicate audit entry). Verified end-to-end that a revoke actually blocks
-  a subsequent attempt-start (`findActiveEntitlementForTest` filters on
-  `status='ACTIVE'`, so a revoked row is excluded exactly like an expired
-  one) — `ENTITLEMENT_NOT_FOUND` returned as expected.
-- **New error code**: `PRODUCT_NOT_FOUND`.
-- **New permissions** (seeder `20260913100010-commerce-permissions.js`, run
-  against both dev and test databases): `order.view`, `entitlement.view`.
-  `product.view`/`.create`/`.update` (already seeded in Phase 1's baseline,
-  unused until now) activate the same way `question.*`/`test.*` did in
-  Phases 5/6.
-- **Deliberately NOT built this phase** (per the spec's own phase split):
-  `PaymentGateway` interface, mock payment provider, `POST /payments/create`,
-  `POST /payments/webhook`, order cancellation. These are Phase 10 (or, for
-  cancellation, an explicit future item — see `docs/KNOWN_ISSUES.md`).
+- **`PaymentGateway` interface** (`src/strategies/payment/PaymentGateway.ts`,
+  ADR-006) — `createPayment(order)` and `verifyWebhook(rawBody, signature)`.
+  No business logic outside the concrete gateway implementation and the
+  `src/strategies/payment/index.ts` factory (`getPaymentGateway()`, selected
+  by `PAYMENT_PROVIDER`) knows a provider's name or wire format — mirrors
+  the existing `OtpProvider`/`getOtpProvider()` pattern exactly.
+- **`MockPaymentGateway`** (`src/strategies/payment/MockPaymentGateway.ts`):
+  `createPayment()` returns a fake `mock_order_<orderId>` reference;
+  webhook payloads are HMAC-signed with a mock-only secret and verified for
+  real — the mock provider never bypasses signature checking, it just
+  doesn't call out to a real network.
+- **`POST /payments/create`** (`src/services/paymentService.ts`): creates a
+  PENDING `payments` row via the gateway for an order the caller owns
+  (`orderPolicy.ensureOwnsOrder`). Idempotent (returns the existing PENDING
+  payment on retry) and rejects an already-`PAID` order
+  (`ORDER_ALREADY_PAID`, 409).
+- **`POST /payments/webhook`** (no session auth — the caller is the payment
+  provider, authenticated by signature, not a token): verifies the
+  signature first (rejects before touching any state on failure), dedupes
+  on `(provider, providerEventId)` via `payment_webhook_events`, then
+  re-verifies amount/currency against the *order's own stored total* —
+  never trusts the webhook body's amount blindly. Only then: one
+  transaction flips `payments`→`PAID`/`paidAt` and `orders`→`PAID`/`paidAt`,
+  followed by `entitlementService.createEntitlementsForPaidOrder(order)`
+  fanning out one entitlement per `product_item` on the order's product
+  (ADR-031's fan-out point), skipping any item the user already has an
+  active entitlement for.
+- **`POST /payments/:paymentId/simulate`** (dev/test-only, 404s unless
+  `PAYMENT_PROVIDER=mock`): builds and HMAC-signs a webhook payload with
+  `MockPaymentGateway.buildSignedWebhook()` and calls the *real*
+  `processWebhook()` — not a parallel "just mark it paid" shortcut. See
+  ADR-032 for why this reuse (not a separate mock-confirm code path) is
+  required, not just convenient.
+- **Purchase-created entitlements are marked distinctly from admin
+  grants**: `grantedBy: null` + `metadata.source: 'PURCHASE'` (vs. an
+  admin's `grantedBy: <adminId>` + `metadata.source: 'ADMIN_GRANT'`), and
+  still audit-logged (`action: entitlement.grant`, `actorId: null`) — the
+  tenth spec-section-46 action instance covered, now including a
+  system-triggered (not just admin-triggered) case.
+- **Full acceptance-criteria flow verified end-to-end manually against a
+  live server**: browse product → create order → create payment → simulate
+  webhook success → order `PAID` + entitlement created → attempt-start now
+  succeeds where it previously returned `ENTITLEMENT_NOT_FOUND`. Also
+  manually verified: forged/missing webhook signature rejected (state
+  unchanged), validly-signed-but-tampered-amount webhook rejected (state
+  unchanged), replayed webhook event ignored, cross-student ownership
+  blocked on both `create` and `simulate`, `ORDER_ALREADY_PAID` on a second
+  payment attempt for a paid order.
+- **No new error codes or permissions needed** — `PAYMENT_NOT_FOUND`,
+  `PAYMENT_VERIFICATION_FAILED`, `PAYMENT_WEBHOOK_INVALID`,
+  `ORDER_ALREADY_PAID` were all already seeded/defined in earlier phases
+  and simply went unused until now (same "activate a dormant code" pattern
+  as `question.*`/`test.*`/`product.*` before it). No admin permission
+  gates `/payments/*` — every route is either "owns this order" (policy) or
+  provider-signature-verified (the webhook), matching the attempt/order
+  pattern rather than the admin-CRUD pattern.
+- **Deliberately NOT built this phase**: a real (non-mock) `PaymentGateway`
+  implementation, raw-byte webhook signature verification (the mock
+  gateway signs the parsed JSON body — documented as a gap a real
+  integration must not repeat, see `docs/KNOWN_ISSUES.md`), order
+  cancellation, a student-facing `GET /entitlements` view.
 
 ### Testing
 
-- **14 new integration tests** (`tests/integration/commerce.test.ts`):
-  student blocked from creating a product, product create + duplicate-slug
-  rejection, price create with audit-log assertion, product-item
-  target-mismatch rejection (422) and a valid SUBSCRIPTION item, student
-  product browsing, order creation + idempotent retry (same key/product),
-  idempotency conflict (same key/different product), cross-student order
-  access denial, student blocked from admin order/entitlement endpoints,
-  admin order listing, entitlement grant→list→idempotent-revoke with a
-  single audit-log row asserted.
-- Manually verified end-to-end against a live server/database first,
-  including the full product→price→item→browse→order→idempotency→
-  entitlement-revoke→attempt-blocked chain, before writing the automated
-  tests — same discipline as every prior phase.
+- **10 new integration tests** (`tests/integration/payment.test.ts`):
+  payment creation + idempotent retry, cross-student ownership rejection on
+  both create and simulate, invalid-signature webhook rejection (state
+  unchanged), valid-signature-wrong-amount webhook rejection (state
+  unchanged), the full simulate-PAID flow (order/payment/entitlement/audit-
+  log all asserted), `ORDER_ALREADY_PAID` on a second payment attempt,
+  webhook-event replay dedup (exactly one `payment_webhook_events` row
+  asserted), and a FAILED outcome leaving the order `PENDING`.
+- Manually verified end-to-end against a live server/database first
+  (including hand-crafting a validly-HMAC-signed-but-tampered payload via a
+  one-off Node script to prove amount verification actually runs, not just
+  signature checking) — same discipline as every prior phase.
 
 ## In Progress
 
-Nothing — Phase 9 scope is complete.
+Nothing — Phase 10 scope is complete.
 
 ## Blocked
 
@@ -104,29 +118,25 @@ None.
 
 ## Known Issues
 
-Updated this phase (see `docs/KNOWN_ISSUES.md`): the "no entitlement
-list/browse/revoke endpoint" item is resolved; added "order cancellation
-not implemented" and "no pagination on Phase 9 list endpoints" as new,
-low-priority items; narrowed the `product_items` CHECK-constraint testing
-gap to specifically "not tested against the raw model" (the app-layer
-duplicate of the same rule is now tested).
+Updated this phase (see `docs/KNOWN_ISSUES.md`): added "no real
+PaymentGateway implementation," "mock gateway signs parsed body not raw
+bytes" (with a warning not to copy that shortcut into a real provider), and
+"no student-facing GET /entitlements view."
 
 ## Next Recommended Task
 
-Phase 10: Payments. Per spec sections 18/24: a `PaymentGateway` interface
-(ADR-006) with a `MockPaymentGateway` implementation, `POST
-/payments/create` (creates a `payments` row PENDING + a provider reference
-for an order), and `POST /payments/webhook` (signature verification, event
-idempotency via `payment_webhook_events`, amount/currency verification
-against the order's `total_amount`, order → `PAID`/`paid_at`, and — this is
-the part that finally makes orders do something — entitlement creation for
-every `product_item` belonging to the paid order's product). The mock
-gateway must still go through a webhook-shaped confirmation path (a
-"simulate provider webhook" endpoint), not a shortcut, so the
-acceptance-criteria flow ("purchase using mock payment → entitlement
-created") is testable end-to-end without bypassing verification — see
-`docs/COMMERCE_AND_PAYMENTS.md`'s Payment Flow section for the exact
-sequence already documented.
+Phase 11: AI. Per spec sections 20/37: an `AIService` interface (ADR-006,
+same pattern as `OtpProvider`/`PaymentGateway`) with a mock implementation,
+an admin-triggered "generate questions" job
+(`ai_generation_jobs`/`ai_generated_questions` tables from Phase 2 —
+confirm their exact shape in `docs/DATABASE.md` before designing the
+service layer), and an admin review step where generated questions must be
+explicitly approved before they enter the normal question-bank workflow
+(reuse `questionService.ts`'s existing approve/reject/version machinery
+rather than inventing a parallel one — same "extend, don't duplicate"
+discipline used for commerce). `AI_JOB_NOT_FOUND`/`AI_GENERATION_FAILED`
+error codes and `ai.generate` permission are already seeded/defined and
+unused, per the established pattern.
 
 ## Last Updated
 
@@ -134,57 +144,47 @@ sequence already documented.
 
 ## Last Development Session
 
-Implemented and verified Phase 9 (Commerce): full admin product/price/item
-CRUD extending Phase 7's deliberately narrow `productRepository.ts`
-(ADR-025's explicit handover instruction), student-facing product browsing,
-an idempotent single-product order-creation flow with server-computed
-pricing (ADR-031 documents why `order_items` is per-product, not
-per-`product_item`), and the entitlement list/revoke endpoints Phase 7
-explicitly deferred here — verified end-to-end that revoking an entitlement
-actually blocks a subsequent attempt-start. Every product-price change is
-audit-logged (the ninth spec-section-46 action). Payments (mock gateway +
-webhook-verified entitlement creation) is next.
+Implemented and verified Phase 10 (Payments): a `PaymentGateway` interface
+(ADR-006) with a `MockPaymentGateway` that signs/verifies real HMAC webhook
+payloads rather than bypassing verification, `POST /payments/create` and
+the webhook-driven `processWebhook()` that is the *only* place an order
+becomes `PAID` and entitlements get created from a purchase — signature
+verification, event-replay dedup, and order-total re-verification all run
+unconditionally before any mutation. `POST /payments/:paymentId/simulate`
+(mock-only) routes through that exact same function rather than a parallel
+shortcut (ADR-032), so the acceptance-criteria "purchase using mock payment
+→ entitlement created" flow is exercised identically to how a real
+provider integration would be. Verified end-to-end manually (including a
+hand-signed tampered-amount payload proving the amount check isn't
+decorative) and via 10 new integration tests (64 total, all passing).
 
 ## Important Files Changed
 
-- `src/errors/errorCodes.ts` (modified — `PRODUCT_NOT_FOUND`)
-- `src/models/{Product.ts,Order.ts,Entitlement.ts}` (modified — `NonAttribute`
-  association declarations for `prices`/`items`/`product`/`productItem`)
-- `src/repositories/productRepository.ts` (extended — product + item CRUD
-  added alongside the existing Phase 7 functions)
-- `src/repositories/{productPriceRepository.ts,orderRepository.ts}` (created)
-- `src/repositories/entitlementRepository.ts` (extended — list/revoke)
-- `src/services/{productService.ts,productBrowseService.ts,orderService.ts}` (created)
-- `src/services/entitlementService.ts` (extended — list/revoke)
-- `src/validations/{product.validation.ts,order.validation.ts}` (created)
-- `src/policies/orderPolicy.ts` (created)
-- `src/controllers/{productController.ts,productBrowseController.ts,orderController.ts}` (created)
-- `src/controllers/entitlementController.ts` (extended — list/revoke)
-- `src/api/v1/routes/adminCommerce.routes.ts` (created)
-- `src/api/v1/routes/entitlement.routes.ts`, `src/api/v1/routes/student.routes.ts` (modified)
-- `src/app.ts` (modified — mounts `adminCommerceRouter`)
-- `src/seeders/20260913100010-commerce-permissions.js` (created — `order.view`, `entitlement.view`)
-- `tests/integration/commerce.test.ts` (created)
-- `docs/API.md`, `docs/COMMERCE_AND_PAYMENTS.md`, `docs/AUTHENTICATION.md`,
-  `docs/SECURITY.md`, `docs/DECISIONS.md` (ADR-031), `docs/KNOWN_ISSUES.md`,
-  `docs/CHANGELOG.md`
+- `src/strategies/payment/{PaymentGateway.ts,MockPaymentGateway.ts,index.ts}` (created)
+- `src/repositories/paymentRepository.ts` (created)
+- `src/repositories/orderRepository.ts` (extended — `updateOrder`)
+- `src/services/paymentService.ts` (created)
+- `src/services/entitlementService.ts` (extended — `createEntitlementsForPaidOrder`)
+- `src/validations/payment.validation.ts` (created)
+- `src/controllers/paymentController.ts` (created)
+- `src/api/v1/routes/payment.routes.ts` (created)
+- `src/app.ts` (modified — mounts `paymentRouter`)
+- `tests/integration/payment.test.ts` (created)
+- `docs/API.md`, `docs/COMMERCE_AND_PAYMENTS.md`, `docs/SECURITY.md`,
+  `docs/DECISIONS.md` (ADR-032), `docs/KNOWN_ISSUES.md`, `docs/CHANGELOG.md`
 
 ## Database Changes
 
-None (no migrations) — Phase 9 used the existing `products`/`product_prices`/
-`product_items`/`orders`/`order_items`/`entitlements` tables from Phase 2
-as-is. One new seeder for the two new permission codes.
+None — Phase 10 used the existing `payments`/`payment_webhook_events`
+tables from Phase 2 as-is (both had gone unused since their migrations ran
+in Phase 2). No new migrations, no new seeders.
 
 ## API Changes
 
 Added (see `docs/API.md` for full request/response shapes):
-- `GET/POST /admin/products`, `GET/PUT/DELETE /admin/products/:id`
-- `GET/POST /admin/products/:id/prices`, `PUT/DELETE /admin/products/:id/prices/:priceId`
-- `GET/POST /admin/products/:id/items`, `DELETE /admin/products/:id/items/:itemId`
-- `GET /admin/orders`, `GET /admin/orders/:orderId`
-- `GET /products`, `GET /products/:productId`
-- `POST /orders`, `GET /orders`, `GET /orders/:orderId`
-- `GET /admin/entitlements`, `DELETE /admin/entitlements/:id`
+- `POST /payments/create`
+- `POST /payments/webhook` (no session auth)
+- `POST /payments/:paymentId/simulate` (mock-only)
 
 ## Testing Status
 
@@ -196,29 +196,33 @@ Added (see `docs/API.md` for full request/response shapes):
 - `tests/integration/testBuilder.test.ts` — 5 tests (Phase 6).
 - `tests/integration/attempt.test.ts` — 5 tests (Phase 7).
 - `tests/integration/results.test.ts` — 6 tests (Phase 8).
-- `tests/integration/commerce.test.ts` — 14 tests (this phase).
-- Total: 54 tests, all passing against the real test database.
-- Still open: the `product_items` CHECK constraint has no test against the
-  raw model bypassing the app-layer schema (see `docs/KNOWN_ISSUES.md`); a
-  few Security Test Coverage checklist items remain
-  implied-but-not-separately-asserted.
+- `tests/integration/commerce.test.ts` — 14 tests (Phase 9).
+- `tests/integration/payment.test.ts` — 10 tests (this phase).
+- Total: 64 tests, all passing against the real test database.
+- Still open: same items as Phase 9 (`product_items` CHECK constraint not
+  tested against the raw model; a few Security Test Coverage checklist
+  items remain implied-but-not-separately-asserted — see
+  `docs/KNOWN_ISSUES.md`).
 
 ## Handover Notes
 
-- **`order_items` is one row per product, not one per `product_item`.**
-  See ADR-031. Phase 10's payment-confirmation → entitlement-creation code
-  must resolve `order_item.product_id` → all of that product's
-  `product_items` itself; don't assume a 1:1 `order_item`↔`product_item`
-  mapping.
-- **`createOrder()` never re-reads price at any point after order
-  creation.** The order's `subtotalAmount`/`taxAmount`/`totalAmount` are
-  frozen at creation time from whatever `product_prices` row was active
-  then. Phase 10's payment verification must check the *order's* stored
-  `totalAmount` against the payment provider's amount — never re-derive a
-  fresh price from the product at payment time.
-- **Product-item target validation exists in two places on purpose**
-  (`createProductItemSchema`'s `superRefine` and the DB `CHECK`
-  constraint) — keep both in sync if `access_type`'s target-column mapping
-  ever changes (e.g. a new access type is added).
+- **`processWebhook()` is the only place that may set `orders.status =
+  'PAID'` or call `createEntitlementsForPaidOrder()`.** Never add a
+  shortcut that marks an order paid from a client-facing request handler —
+  see ADR-032 and `docs/SECURITY.md`'s Payment Security section for why,
+  and the exact case (Phase 7's `createAttempt` leak) this project already
+  learned this lesson from once.
+- **The mock gateway's HMAC covers the parsed JSON body, not raw request
+  bytes.** This is fine for a mock provider but is explicitly *not* a
+  template for a real provider integration — a real gateway must verify
+  over raw bytes per that provider's documented scheme. See
+  `docs/KNOWN_ISSUES.md`.
+- **`createEntitlementsForPaidOrder()` is idempotent per `product_item`,
+  not per webhook event** — it's safe to call it twice for the same order
+  (e.g. from a retried simulate call with a fresh `eventId`) because it
+  checks for an existing active entitlement per item before creating one,
+  independent of the webhook-event-level dedup that already runs earlier
+  in `processWebhook()`. Both layers of idempotency are intentional and
+  both are tested.
 - Read `CLAUDE.md` and this file first in any new session before writing
   code.

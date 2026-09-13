@@ -59,45 +59,77 @@ the student-facing flow; `GET /admin/orders`/`GET /admin/orders/:orderId`
 (`order.view`) give admin browsing. Order cancellation is not implemented
 (see `docs/KNOWN_ISSUES.md`).
 
-## Payment Flow
+## Payment Flow — Implemented (Phase 10)
 
 ```
-PaymentGateway (interface)
-  ├── MockPaymentGateway   (development)
+PaymentGateway (interface)                    src/strategies/payment/PaymentGateway.ts
+  ├── MockPaymentGateway   (development)       src/strategies/payment/MockPaymentGateway.ts
   └── <RealProvider>PaymentGateway (future — Razorpay/Stripe/etc.)
 ```
 
 No provider-specific logic outside the concrete gateway implementation —
-services depend only on the `PaymentGateway` interface (ADR-006).
+`src/services/paymentService.ts` depends only on the `PaymentGateway`
+interface (ADR-006); `src/strategies/payment/index.ts`'s `getPaymentGateway()`
+factory is the only place that knows the `PAYMENT_PROVIDER` env value.
 
 ```
 POST /payments/create { orderId }
+  → 404s ORDER_ALREADY_PAID if the order is already PAID; returns the
+    existing PENDING payment if one already exists for this order
+    (idempotent — never creates two provider-side payment intents)
   → PaymentGateway.createPayment(order) → payments row (PENDING) + provider
-    reference returned to client
+    reference (providerOrderId) returned to client
 
-[external] provider webhook → POST /payments/webhook
+[external] provider webhook → POST /payments/webhook   (no session auth — the
+                                                          caller is the
+                                                          provider, verified
+                                                          by signature)
   receive
-   → verify provider signature
+   → PaymentGateway.verifyWebhook(rawBody, signature) — invalid signature is
+     rejected (errorCode PAYMENT_WEBHOOK_INVALID, 400) before anything else
+     runs, regardless of what the body claims
    → check payment_webhook_events uniqueness (provider, provider_event_id) —
-     reject/ignore duplicates
-   → verify amount matches the order's total_amount
-   → verify currency + order reference match
-   → update payments row (status)
-   → update orders row (status = PAID, paid_at)
-   → create entitlements row(s) for each product_item on the order's product
-   → commit
+     a replayed event returns { alreadyProcessed: true } and touches nothing
+   → look up the payment by providerOrderId (errorCode PAYMENT_NOT_FOUND if
+     unknown) and its order
+   → re-verify amount + currency against the order's OWN stored
+     total_amount/currency_code — never trust the webhook body's amount
+     blindly (errorCode PAYMENT_VERIFICATION_FAILED, 422, on mismatch; no
+     state changes on rejection)
+   → record the payment_webhook_events row
+   → status=FAILED: payments row → FAILED, failedAt set; order untouched
+   → status=PAID: one transaction sets payments row → PAID/paidAt and (if
+     not already) orders row → PAID/paidAt, then
+     entitlementService.createEntitlementsForPaidOrder(order) fans out one
+     entitlement per product_item belonging to the order's product
+     (ADR-031 — an order_item is per-product, this is where the fan-out to
+     individual product_items happens), skipping any product_item the user
+     already has an active entitlement for (idempotent per item, not just
+     per webhook event)
 ```
 
-The mock payment provider must still go through this same webhook-shaped
-verification path in a local-dev-appropriate way (e.g. a mock "confirm
-payment" endpoint that simulates the provider calling the webhook with a
-validly-signed mock payload) so the entitlement-creation code path is exercised
-identically to production, and the acceptance-criteria flow ("Purchase using
-mock payment → Entitlement created") is testable end-to-end without a shortcut
-that bypasses webhook verification.
+**The mock provider goes through this exact same verification path.**
+`POST /payments/:paymentId/simulate` (`errorCode NOT_FOUND` unless
+`PAYMENT_PROVIDER=mock` — the endpoint doesn't exist in a non-mock
+configuration) requires the caller to own the payment's order
+(`orderPolicy.ensureOwnsOrder`), then builds and HMAC-signs a payload with
+`MockPaymentGateway.buildSignedWebhook()` and calls the real
+`paymentService.processWebhook()` — not a parallel shortcut implementation.
+This satisfies the acceptance-criteria flow ("purchase using mock payment →
+entitlement created") end-to-end without bypassing signature/amount
+verification.
 
 **The frontend is never trusted to report payment success.** Entitlements are
-only created by the server-side webhook-verification path.
+only created by the server-side webhook-verification path (`processWebhook`),
+never by a client callback or redirect.
+
+**Not implemented**: a real (non-mock) `PaymentGateway` implementation
+(Razorpay/Stripe/etc. — add one behind the same interface when a real
+provider is chosen); raw-byte webhook signature verification (the mock
+gateway signs the parsed JSON body, which is adequate for local dev/tests
+but a real provider integration should verify over the raw request bytes
+per that provider's documented scheme, since JSON re-serialization is not
+guaranteed byte-identical to what was received).
 
 ## Entitlements
 
@@ -118,6 +150,18 @@ separate best-effort update. **Implemented and verified (Phase 7)**:
 resolves `INDIVIDUAL_TEST`/`EXAM_PACKAGE`/`TEST_SERIES`/blanket
 `SUBSCRIPTION`/`ALL_ACCESS` matches (not `SUBJECT_PACKAGE` — see
 `docs/DECISIONS.md` ADR-026).
+
+**Purchase-created entitlements (Phase 10)**:
+`createEntitlementsForPaidOrder()` sets `order_id` to the paid order, copies
+`attempt_limit`/computes `valid_until` (now + `access_duration_days`, or
+`null` for unlimited) from each `product_item`, and sets `granted_by = null`
+(distinguishing a system/purchase grant from an admin's `granted_by =
+<adminId>`) with `metadata.source = 'PURCHASE'` — mirroring the admin path's
+`metadata.source = 'ADMIN_GRANT'`. Still audit-logged as `entitlement.grant`
+(with `actorId: null`) since "entitlement changes" is unconditional in spec
+section 46's list, not just admin-triggered ones. Verified end-to-end
+manually (product → order → payment → simulate → entitlement → attempt
+unlocked) and via `tests/integration/payment.test.ts`.
 
 ## Admin Overrides — Grant Implemented (Phase 7), List/Revoke Implemented (Phase 9)
 

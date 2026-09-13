@@ -49,18 +49,36 @@
   (ADR-022). Fine for V1; add `GET /admin/tags` if an admin UI ever needs a
   tag picker independent of authoring a question.
 - **Order cancellation is not implemented.** An order created via
-  `POST /orders` stays `PENDING` forever if the customer abandons checkout —
-  there's no `POST /orders/:id/cancel` and no expiry job. Low priority until
-  Payments (Phase 10) exists, since nothing currently depends on a
-  `PENDING` order ever changing state on its own; revisit once a real
-  payment flow makes "abandoned checkout" a real scenario worth cleaning up.
-- **No pagination on any Phase 9 list endpoint** (`GET /products`,
+  `POST /orders` stays `PENDING` forever if the customer abandons checkout
+  and never pays — there's no `POST /orders/:id/cancel` and no expiry job.
+  Low priority: nothing currently depends on a `PENDING` order ever
+  changing state on its own; revisit once "abandoned checkout" cleanup
+  actually matters (e.g. for reporting/inventory reasons a real product
+  might need).
+- **No pagination on any Phase 9/10 list endpoint** (`GET /products`,
   `GET /orders`, `GET /admin/orders`, `GET /admin/entitlements`,
   `GET /admin/products`) — same gap as every other list endpoint built so
   far (`docs/API.md`'s Conventions section documents the intended
   `page`/`pageSize` shape, but no endpoint implements it yet). Fine at
   current data volumes; add pagination as a cross-cutting pass once any
   list endpoint's result set could realistically grow unbounded.
+- **No real (non-mock) `PaymentGateway` implementation exists yet.** Only
+  `MockPaymentGateway` is wired up (`PAYMENT_PROVIDER=mock`); a real
+  provider (Razorpay/Stripe/etc.) needs its own class behind the same
+  interface plus real webhook signature verification per that provider's
+  documented scheme (see the raw-body-vs-parsed-body note below).
+- **The mock payment gateway signs the parsed JSON body, not raw request
+  bytes.** Adequate for local dev/tests (there's no real network hop to
+  introduce re-serialization drift), but a real provider integration
+  typically requires verifying an HMAC over the exact raw bytes received,
+  since JSON.stringify-ing a parsed body is not guaranteed to reproduce the
+  original wire bytes. Don't copy the mock gateway's approach when building
+  a real one — see ADR-032's Consequences.
+- **No `GET /entitlements` student-facing "my entitlements" view.** A
+  student can infer purchase success from `GET /orders/:id`'s `status`
+  field, but there's no endpoint listing what they currently have access
+  to. Low priority for the backend; add it if/when the student frontend
+  needs a "my purchases/access" screen.
 - **`SUBJECT_PACKAGE` entitlements grant no actual test access.**
   `findActiveEntitlementForTest()` deliberately doesn't resolve this access
   type — a test isn't scoped to one subject, so "does this test belong to

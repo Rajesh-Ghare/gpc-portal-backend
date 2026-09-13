@@ -138,7 +138,7 @@ GET  /attempts/:attemptId/result         → shape depends on the test's
                                               IMMEDIATE and no released_at is set yet (Phase 8)
 ```
 
-### Commerce (Student-Facing) — Products/Orders Implemented (Phase 9)
+### Commerce (Student-Facing) — Products/Orders (Phase 9), Payments (Phase 10)
 
 Every route requires `Authorization: Bearer <token>` but no admin
 permission — just a valid session. Order ownership is enforced by
@@ -165,11 +165,27 @@ POST /orders                             { productId, idempotencyKey }
 GET  /orders                             → the current user's own orders
 GET  /orders/:orderId                    → a single order (must be the requester's own)
                                           errorCode ORDER_NOT_FOUND / FORBIDDEN
+
+POST /payments/create                    { orderId }
+                                          → creates (or returns the existing PENDING)
+                                            payment via the configured PaymentGateway
+                                          errorCode ORDER_ALREADY_PAID / ORDER_NOT_FOUND / FORBIDDEN
+POST /payments/webhook                   NO session auth — the caller is the payment
+                                          provider, authenticated by signature, not a
+                                          token. See docs/COMMERCE_AND_PAYMENTS.md for
+                                          the full verify → dedupe → verify-amount →
+                                          mark-paid → create-entitlements sequence.
+                                          errorCode PAYMENT_WEBHOOK_INVALID / PAYMENT_NOT_FOUND /
+                                            PAYMENT_VERIFICATION_FAILED
+POST /payments/:paymentId/simulate       { outcome?: 'PAID' | 'FAILED' }  (default PAID)
+                                          Dev/test-only: builds a signed mock webhook
+                                          payload and routes it through the real
+                                          POST /payments/webhook verification path.
+                                          errorCode NOT_FOUND unless PAYMENT_PROVIDER=mock
 ```
 
-Payment endpoints (`POST /payments/create`, `POST /payments/webhook`) and
-`GET /entitlements` (a student-facing "my entitlements" view) remain
-Phase 10 / not yet built — see below.
+`GET /entitlements` (a student-facing "my entitlements" view) is not yet
+built — see `docs/KNOWN_ISSUES.md`.
 
 ### Admin
 
@@ -430,9 +446,8 @@ POST /admin/tests/:testId/results/release     requires result.release
                                                Audit-logged (action: result.release)
 ```
 
-Everything else in this section (payment flow, students, AI generation, AI
-job status, settings) is planned but not yet implemented — payments are
-Phase 10, right after Commerce.
+Everything else in this section (students, AI generation, AI job status,
+settings) is planned but not yet implemented.
 
 ## Conventions
 

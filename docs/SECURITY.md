@@ -50,12 +50,27 @@ rather than building its own response. See `docs/DECISIONS.md` and
 endpoint that returns attempt-question data must reuse the existing safe
 serializer, never eager-load-and-return directly.
 
-## Payment Security
+## Payment Security — Implemented (Phase 10)
 
-See `COMMERCE_AND_PAYMENTS.md`. Webhook signature verification, event
-idempotency, and amount/currency verification happen before any order/
-entitlement mutation. The frontend's "payment success" callback/redirect is
-never sufficient on its own to grant an entitlement.
+See `COMMERCE_AND_PAYMENTS.md` for the full sequence.
+`src/services/paymentService.ts`'s `processWebhook()` is the single place
+any order/entitlement mutation from a purchase can happen, and it always
+runs, in order: (1) `PaymentGateway.verifyWebhook()` — an invalid signature
+is rejected before anything else runs, regardless of what the body claims;
+(2) `payment_webhook_events` uniqueness check — a replayed
+`(provider, providerEventId)` returns early untouched; (3) amount/currency
+re-verification against the *order's own stored* `total_amount`/
+`currency_code`, never the webhook body's claim taken at face value — a
+mismatch is rejected (`PAYMENT_VERIFICATION_FAILED`) with no state change,
+verified with a validly-signed-but-tampered-amount payload in
+`tests/integration/payment.test.ts`. Only after all three pass does the
+order flip to `PAID` and entitlements get created. **The frontend's
+"payment success" callback/redirect is never sufficient on its own to grant
+an entitlement** — there is no code path from a client request directly to
+an entitlement being created; the mock provider's `POST
+/payments/:paymentId/simulate` (guarded to only exist when
+`PAYMENT_PROVIDER=mock`) still goes through this exact same
+`processWebhook()` function via a real HMAC-signed payload, not a shortcut.
 
 ## Authorization
 
@@ -99,10 +114,24 @@ own?").
 - [x] **A student cannot call admin-only APIs** — verified across Phases
       4–8 (`FORBIDDEN` from `requirePermission`), including the new Phase 8
       admin attempt/result/release endpoints.
+- [x] **A payment webhook with an invalid/missing signature is rejected
+      without any state change** — verified,
+      `tests/integration/payment.test.ts` (`errorCode
+      PAYMENT_WEBHOOK_INVALID`, order asserted still `PENDING` afterward).
+- [x] **A validly-signed webhook whose amount doesn't match the order is
+      rejected without any state change** — verified, same file
+      (`errorCode PAYMENT_VERIFICATION_FAILED`, a tampered-amount payload
+      signed with the real gateway).
+- [x] **A replayed webhook event does not duplicate a payment/order
+      transition or an entitlement** — verified, same file (`{
+      alreadyProcessed: true }` on the second delivery, exactly one
+      `payment_webhook_events` row asserted).
+- [x] **A student cannot create or simulate a payment for another
+      student's order** — verified, same file
+      (`orderPolicy.ensureOwnsOrder`, `errorCode FORBIDDEN`).
 
-Unchecked items above are either not yet applicable (pricing) or are
-implied-but-not-separately-asserted — add explicit tests for them as the
-relevant phase (9 for pricing) makes them concrete.
+Unchecked items above are implied-but-not-separately-asserted — add
+explicit tests for them as the relevant phase makes them concrete.
 
 ## Auditability
 
@@ -112,7 +141,7 @@ changes, result release, role/permission changes, and any administrative
 override. Each entry records actor, action, entity, before/after data, IP,
 user agent, and a timestamp.
 
-**Implemented (Phases 5–9)**: `src/services/auditLogService.ts` — currently
+**Implemented (Phases 5–10)**: `src/services/auditLogService.ts` — currently
 called from `question.approve`, `question.reject`,
 `question.version_created` (`src/services/questionService.ts`),
 `test.publish`, `test.close` (`src/services/testService.ts`),
@@ -120,12 +149,17 @@ called from `question.approve`, `question.reject`,
 `result.release` (`src/services/resultService.ts`), and
 `product.price_changed` (`src/services/productService.ts`, on price
 create/update/delete) — exactly the nine question-bank/test/entitlement/
-result/pricing actions spec section 46 calls out so far. Metadata-only
-question edits, test archive, plain product/product-item CRUD, and every
-catalog/subject/topic/section/question-assignment/rule/order/attempt-viewing
-CRUD or read action is deliberately **not** audited — they aren't in the
-spec's list. Follow this same "only the listed actions" discipline as later
-phases add role/permission changes — don't audit-log everything by default.
+result/pricing actions spec section 46 calls out so far. `entitlement.grant`
+is written for both an admin's manual grant (`actorId` = the admin's user
+id) and a purchase-triggered grant from `processWebhook()`
+(`actorId: null`, `metadata.source: 'PURCHASE'`) — "entitlement changes" in
+the spec's list isn't qualified as admin-only, so both paths are audited
+the same way. Metadata-only question edits, test archive, plain product/
+product-item CRUD, and every catalog/subject/topic/section/question-
+assignment/rule/order/attempt-viewing/payment-creation CRUD or read action
+is deliberately **not** audited — they aren't in the spec's list. Follow
+this same "only the listed actions" discipline as later phases add role/
+permission changes — don't audit-log everything by default.
 
 ## Secrets
 

@@ -1,4 +1,4 @@
-import type { CreationAttributes, Transaction } from 'sequelize';
+import type { CreationAttributes, InferAttributes, Transaction } from 'sequelize';
 import { Order, OrderItem } from '../models';
 
 export async function findByUserAndIdempotencyKey(userId: string, idempotencyKey: string) {
@@ -15,6 +15,12 @@ export async function createOrderItem(data: CreationAttributes<OrderItem>, trans
 
 export async function findOrderById(id: string) {
   return Order.findByPk(id, { include: [{ association: 'items' }] });
+}
+
+export async function updateOrder(order: Order, data: Partial<InferAttributes<Order>>) {
+  order.set(data);
+  await order.save();
+  return order;
 }
 
 export interface OrderFilter {

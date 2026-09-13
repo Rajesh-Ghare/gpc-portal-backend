@@ -10,7 +10,7 @@ import { slugify } from '../utils/slugify';
 import { ProductItem } from '../models';
 import type { grantEntitlementSchema } from '../validations/entitlement.validation';
 import type { AuditContext } from './questionService';
-import type { Test } from '../models';
+import type { Order, Test } from '../models';
 
 type GrantEntitlementInput = z.infer<typeof grantEntitlementSchema>;
 
@@ -123,6 +123,56 @@ export async function findActiveEntitlementForTest(userId: string, test: Test) {
 
 export async function listEntitlements(filter: entitlementRepo.EntitlementFilter = {}) {
   return entitlementRepo.listEntitlements(filter);
+}
+
+/**
+ * Called only from paymentService once a webhook has verified an order was
+ * actually paid (never from a client-trusted "payment succeeded" signal —
+ * see docs/SECURITY.md). Fans out one entitlement per `product_item`
+ * belonging to the order's product (ADR-031: an order_item is per-product,
+ * not per-product_item, so this is where that fan-out happens). Idempotent
+ * per item — a webhook retry (or a product with items added after purchase
+ * being re-scanned) never duplicates an already-active entitlement.
+ */
+export async function createEntitlementsForPaidOrder(order: Order) {
+  const created = [];
+  const productIds = [...new Set((order.items ?? []).map((item) => item.productId))];
+
+  for (const productId of productIds) {
+    const items = await productRepo.listItems(productId);
+    for (const item of items) {
+      const existing = await entitlementRepo.findActiveByUserAndProductItem(order.userId, item.id);
+      if (existing) continue;
+
+      const validUntil = item.accessDurationDays
+        ? new Date(Date.now() + item.accessDurationDays * 24 * 60 * 60 * 1000)
+        : null;
+
+      const entitlement = await entitlementRepo.createEntitlement({
+        userId: order.userId,
+        productId: item.productId,
+        orderId: order.id,
+        productItemId: item.id,
+        attemptLimit: item.attemptLimit,
+        validFrom: new Date(),
+        validUntil,
+        grantedBy: null,
+        metadata: { source: 'PURCHASE', orderId: order.id },
+      });
+
+      await recordAudit({
+        actorId: null,
+        action: 'entitlement.grant',
+        entityType: 'entitlement',
+        entityId: entitlement.id,
+        afterData: { userId: order.userId, productItemId: item.id, orderId: order.id, source: 'PURCHASE' },
+      });
+
+      created.push(entitlement);
+    }
+  }
+
+  return created;
 }
 
 /**

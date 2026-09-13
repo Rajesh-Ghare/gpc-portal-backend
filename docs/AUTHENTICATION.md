@@ -168,6 +168,18 @@ is reserved for the *admin* "browse any user's orders" use case
 (`GET /admin/orders`) — do not confuse the two, same warning as
 `attempt.view` above.
 
+**`/payments/*` (Phase 10) uses no permission code at all.**
+`POST /payments/create` and `POST /payments/:paymentId/simulate` reuse
+`orderPolicy.ensureOwnsOrder` (via the payment's order) — same "policy, not
+permission" pattern as orders/attempts. `POST /payments/webhook` uses
+neither `authenticate` nor a permission — its caller is the payment
+provider, authenticated by `PaymentGateway.verifyWebhook()`'s signature
+check instead of a session token; this is why it's registered on
+`paymentRouter` *before* that router's `.use(authenticate)` call (Express
+processes routes in registration order, so a route added before a `.use()`
+never runs that middleware for its own path) — see
+`src/api/v1/routes/payment.routes.ts`.
+
 ## Session Model
 
 `sessions` rows back server-side revocation (logout, admin-forced logout —

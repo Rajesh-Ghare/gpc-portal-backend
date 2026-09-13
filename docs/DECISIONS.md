@@ -1024,3 +1024,51 @@ Consequences:
 - `createOrder()` computes `subtotal`/`tax`/`total` from exactly one
   `product_prices` row (the current active price for the order's product),
   never from a client-supplied amount — see `docs/SECURITY.md`.
+
+## ADR-032: Mock Payment Confirmation Reuses the Real Webhook Handler
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+There is no separate "mock payment succeeded" code path. `POST
+/payments/:paymentId/simulate` (only enabled when `PAYMENT_PROVIDER=mock`)
+builds a webhook-shaped payload, signs it with
+`MockPaymentGateway.buildSignedWebhook()` (a real HMAC over the payload,
+using a mock-only secret known only inside that class), and calls
+`paymentService.processWebhook()` — the exact same function
+`POST /payments/webhook` calls for a real provider callback. Signature
+verification, webhook-event dedup, and amount/currency re-verification all
+run for real on the simulated payload; nothing about the "this is a
+simulation" fact is passed through to skip a check.
+
+Reason:
+The spec's Final Acceptance Criteria requires "purchase using mock payment
+→ entitlement created" to work end-to-end locally (ADR-006), but a payment
+flow's most security-critical logic *is* the webhook verification chain.
+A `simulateSuccess()` helper that directly sets `order.status = 'PAID'` and
+calls entitlement creation would test nothing about that chain and could
+silently diverge from it over time (e.g. someone adds a new check to
+`processWebhook()` and forgets the parallel mock path). Routing the
+simulation through the real function makes that divergence structurally
+impossible.
+
+Alternatives:
+A dedicated `mockConfirmPayment()` service function that skips straight to
+"mark paid, create entitlements" — rejected for the reason above: it is the
+"reuse the existing safe path, don't build a parallel one" mistake ADR-030
+already named and rejected in a different part of this codebase.
+
+Consequences:
+- `MockPaymentGateway` needs a second, non-interface method
+  (`buildSignedWebhook`) beyond what `PaymentGateway` requires — acceptable
+  since it's explicitly dev/test-only tooling, not something
+  `paymentService.ts`'s business logic calls directly (only the
+  `/simulate` controller path does).
+- A real provider integration (Razorpay/Stripe/etc.) needs no equivalent
+  method — real webhooks arrive from the actual provider, so nothing
+  simulates them.
+- The mock gateway signs the parsed JSON body (not raw request bytes); see
+  `docs/COMMERCE_AND_PAYMENTS.md`'s Payment Flow section for why that's a
+  deliberate simplification acceptable for a mock-only provider, and a gap
+  a real provider integration must not repeat.

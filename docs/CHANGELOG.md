@@ -113,6 +113,22 @@
   `CHECK` constraint) as well as the database. Every product-price change
   is audit-logged (`product.price_changed`). Verified manually end-to-end
   and via 14 new integration tests.
+- Payments: a `PaymentGateway` interface (ADR-006) with a `MockPaymentGateway`
+  that HMAC-signs/verifies real webhook payloads rather than bypassing
+  verification. `POST /payments/create` (idempotent, rejects an
+  already-PAID order) and `POST /payments/webhook` (no session auth —
+  signature-verified instead) — the only code path that can mark an order
+  PAID and create entitlements from a purchase, running signature
+  verification, event-replay dedup, and order-total re-verification before
+  any mutation. `POST /payments/:paymentId/simulate` (mock-provider-only)
+  reuses that exact same webhook-processing function via a real signed
+  payload rather than a parallel shortcut (ADR-032), so "purchase using
+  mock payment -> entitlement created" is exercised identically to a real
+  provider integration. Purchase-created entitlements are marked
+  `metadata.source: 'PURCHASE'` with `grantedBy: null` (vs. an admin
+  grant's `ADMIN_GRANT`/adminId) and still audit-logged. Verified manually
+  end-to-end (including a hand-signed tampered-amount payload proving
+  amount verification isn't decorative) and via 10 new integration tests.
 
 ### Changed
 
@@ -160,7 +176,7 @@
   `docs/EXAM_ENGINE.md`, `docs/AUTHENTICATION.md`,
   `docs/COMMERCE_AND_PAYMENTS.md`, `docs/AI.md`, `docs/SECURITY.md`,
   `docs/DEPLOYMENT.md`, `docs/TESTING.md`, `docs/DECISIONS.md`
-  (ADR-001 through ADR-031), `docs/KNOWN_ISSUES.md`,
+  (ADR-001 through ADR-032), `docs/KNOWN_ISSUES.md`,
   `docs/DEVELOPMENT_STATUS.md`, and root `CLAUDE.md`.
 - `docs/DATABASE.md` rewritten to describe the as-built schema (migration
   order, integrity rules, seeding, and modeling decisions made where the
@@ -181,3 +197,11 @@
   (order_items is per-product, not per-product_item); `docs/KNOWN_ISSUES.md`
   resolved the entitlement list/revoke item and added order-cancellation
   and pagination items.
+- `docs/COMMERCE_AND_PAYMENTS.md`'s Payment Flow section rewritten for the
+  as-built webhook verification sequence; `docs/API.md` gained the
+  `/payments/*` endpoints; `docs/SECURITY.md`'s Payment Security section
+  and Required Security Test Coverage checklist updated for the
+  now-implemented (and tested) signature/replay/amount verification;
+  `docs/DECISIONS.md` gained ADR-032 (mock payment confirmation reuses the
+  real webhook handler); `docs/KNOWN_ISSUES.md` added the "no real
+  PaymentGateway yet" and "mock signs parsed body, not raw bytes" items.
