@@ -99,6 +99,20 @@
   serializer functions from the student-facing ones — see ADR-030.
   Verified with 3 real students producing a real tie (rank/percentile
   matched by hand) and via 11 new tests (5 unit, 6 integration).
+- Commerce: full admin product/price/item CRUD extending Phase 7's
+  deliberately narrow `productRepository.ts` (`product.view`/`.create`/
+  `.update`), student-facing `GET /products`/`GET /products/:id`, and an
+  idempotent single-product order flow (`POST /orders`, `GET /orders`,
+  `GET /orders/:id`) that snapshots product name + current active price
+  into `order_items` and never re-reads pricing later (ADR-031 explains
+  why `order_items` is per-product, not per-`product_item`). Closed the
+  Phase 7 (ADR-025) gap: `GET /admin/entitlements` (list/filter) and
+  `DELETE /admin/entitlements/:id` (idempotent revoke), verified to
+  actually block a subsequent attempt-start. Product-item target/access-type
+  validation is enforced at the service layer (matching the existing DB
+  `CHECK` constraint) as well as the database. Every product-price change
+  is audit-logged (`product.price_changed`). Verified manually end-to-end
+  and via 14 new integration tests.
 
 ### Changed
 
@@ -146,7 +160,7 @@
   `docs/EXAM_ENGINE.md`, `docs/AUTHENTICATION.md`,
   `docs/COMMERCE_AND_PAYMENTS.md`, `docs/AI.md`, `docs/SECURITY.md`,
   `docs/DEPLOYMENT.md`, `docs/TESTING.md`, `docs/DECISIONS.md`
-  (ADR-001 through ADR-030), `docs/KNOWN_ISSUES.md`,
+  (ADR-001 through ADR-031), `docs/KNOWN_ISSUES.md`,
   `docs/DEVELOPMENT_STATUS.md`, and root `CLAUDE.md`.
 - `docs/DATABASE.md` rewritten to describe the as-built schema (migration
   order, integrity rules, seeding, and modeling decisions made where the
@@ -161,3 +175,9 @@
   for the as-built engine, including the two bugs found during Phase 7 and
   a new Rank & Percentile section; `docs/COMMERCE_AND_PAYMENTS.md` updated
   for the implemented entitlement resolution and admin-grant override.
+- `docs/COMMERCE_AND_PAYMENTS.md`, `docs/API.md`, `docs/AUTHENTICATION.md`,
+  `docs/SECURITY.md` updated for Phase 9's implemented product/price/item/
+  order/entitlement-revoke endpoints; `docs/DECISIONS.md` gained ADR-031
+  (order_items is per-product, not per-product_item); `docs/KNOWN_ISSUES.md`
+  resolved the entitlement list/revoke item and added order-cancellation
+  and pagination items.

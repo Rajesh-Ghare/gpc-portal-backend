@@ -91,20 +91,24 @@ Initial roles: `SUPER_ADMIN`, `ADMIN`, `STUDENT` (seeded — see
 `EXAM_MANAGER`, `CONTENT_EDITOR`, `SUPPORT`, `FINANCE`) must be addable by
 inserting rows, not by adding code branches.
 
-Permission codes currently seeded (29 total): the 20 concrete examples from
+Permission codes currently seeded (31 total): the 20 concrete examples from
 spec section 25, plus 4 `catalog.*` codes added in Phase 4 for
 categories/exams/series admin CRUD (ADR-021), plus 4 `subject.*` codes added
 in Phase 5 for subjects/topics admin CRUD (ADR-022 — same "one shared family
 per nested hierarchy" reasoning), plus `entitlement.grant` added in Phase 7
-(ADR-025). `question.*` and `test.*` (both already seeded in Phase 1's
-baseline list) went unused until Phases 5 and 6 respectively wired them to
-real routes — `view`/`create`/`update` gate the CRUD + versioning/section/
-rule endpoints, `approve`/`reject`/`validate`/`publish`/`close` gate their
-namesake workflow endpoints, and `update` is also reused to gate deletion
-for both families (no separate `question.delete` or `test.delete`/
-`test.archive` code exists — spec's example lists stop short of those; test
-archive reuses `test.close`, see ADR-024). Extend as each further admin
-module is built.
+(ADR-025), plus `order.view` and `entitlement.view` added in Phase 9.
+`question.*` and `test.*` (both already seeded in Phase 1's baseline list)
+went unused until Phases 5 and 6 respectively wired them to real routes —
+`view`/`create`/`update` gate the CRUD + versioning/section/rule endpoints,
+`approve`/`reject`/`validate`/`publish`/`close` gate their namesake workflow
+endpoints, and `update` is also reused to gate deletion for both families
+(no separate `question.delete` or `test.delete`/`test.archive` code exists —
+spec's example lists stop short of those; test archive reuses `test.close`,
+see ADR-024). `product.view`/`.create`/`.update` (also already seeded in
+Phase 1's baseline) went unused until Phase 9 wired them to the new
+product/price/item admin CRUD — `update` is reused to gate deletion here
+too (no separate `product.delete`), same pattern as `question`/`test`.
+Extend as each further admin module is built.
 
 ```
 question.view, question.create, question.update, question.approve, question.reject
@@ -117,7 +121,8 @@ result.view, result.release
 ai.generate
 catalog.view, catalog.create, catalog.update, catalog.delete
 subject.view, subject.create, subject.update, subject.delete
-entitlement.grant
+entitlement.grant, entitlement.view
+order.view
 ```
 
 `requirePermission(code)` (`src/middleware/auth.ts`) resolves the current
@@ -154,6 +159,14 @@ attempt/result views are **separate serializer functions** from the
 student-facing ones (`attemptAdminService.ts`/`resultService.ts` vs.
 `attemptService.ts`) — see ADR-030 for why a shared function with an
 `isAdmin` flag was deliberately rejected.
+
+**`src/policies/orderPolicy.ts` added in Phase 9**, a second data-scoped
+policy alongside `attemptPolicy.ts`: `ensureOwnsOrder(order, userId)` gates
+`GET /orders/:orderId` (any logged-in user, no permission code — the same
+"policy, not permission" split as attempts). `order.view` (already seeded)
+is reserved for the *admin* "browse any user's orders" use case
+(`GET /admin/orders`) — do not confuse the two, same warning as
+`attempt.view` above.
 
 ## Session Model
 

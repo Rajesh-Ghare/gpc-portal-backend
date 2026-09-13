@@ -72,15 +72,23 @@ own?").
 - [ ] A student cannot access another student's result (implied by the
       above via `getResult`'s ownership check, but not separately asserted
       in a test yet).
+- [x] **A student cannot access another student's order** — verified,
+      `tests/integration/commerce.test.ts` (`orderPolicy.ensureOwnsOrder`,
+      `errorCode FORBIDDEN`).
 - [x] **A student cannot submit another student's attempt** — verified,
       same test file.
 - [x] **Correct answers are never present in an in-progress-attempt API
       response** — verified for `POST /tests/:id/attempts`'s response
       (the bug described above); `GET /attempts/:id` uses the identical
       serializer so is covered by the same guarantee.
-- [ ] The frontend cannot change price (server re-reads `product_prices`,
-      ignores any client-supplied amount) — not yet applicable, no pricing
-      exists until Commerce (Phase 9).
+- [x] **The frontend cannot change price** — `POST /orders` only accepts
+      `{ productId, idempotencyKey }`; the order's `subtotalAmount`/
+      `taxAmount`/`totalAmount` are always computed server-side from the
+      product's current active `product_price` row, never from any
+      client-supplied amount. Verified manually (Phase 9) and via
+      `tests/integration/commerce.test.ts`'s order-creation test asserting
+      the returned `totalAmount` matches the seeded price, not anything the
+      request could have supplied.
 - [x] **The frontend cannot bypass entitlement checks to start an
       attempt** — verified, `ENTITLEMENT_NOT_FOUND` returned with no
       entitlement present.
@@ -104,19 +112,20 @@ changes, result release, role/permission changes, and any administrative
 override. Each entry records actor, action, entity, before/after data, IP,
 user agent, and a timestamp.
 
-**Implemented (Phases 5–8)**: `src/services/auditLogService.ts` — currently
+**Implemented (Phases 5–9)**: `src/services/auditLogService.ts` — currently
 called from `question.approve`, `question.reject`,
 `question.version_created` (`src/services/questionService.ts`),
 `test.publish`, `test.close` (`src/services/testService.ts`),
-`entitlement.grant` (`src/services/entitlementService.ts`), and
-`result.release` (`src/services/resultService.ts`) — exactly the seven
-question-bank/test/entitlement/result actions spec section 46 calls out so
-far. Metadata-only question edits, test archive, and every catalog/subject/
-topic/section/question-assignment/rule/attempt-viewing CRUD or read action
-is deliberately **not** audited — they aren't in the spec's list. Follow
-this same "only the listed actions" discipline as later phases add price
-changes and role/permission changes — don't audit-log everything by
-default.
+`entitlement.grant`, `entitlement.revoke` (`src/services/entitlementService.ts`),
+`result.release` (`src/services/resultService.ts`), and
+`product.price_changed` (`src/services/productService.ts`, on price
+create/update/delete) — exactly the nine question-bank/test/entitlement/
+result/pricing actions spec section 46 calls out so far. Metadata-only
+question edits, test archive, plain product/product-item CRUD, and every
+catalog/subject/topic/section/question-assignment/rule/order/attempt-viewing
+CRUD or read action is deliberately **not** audited — they aren't in the
+spec's list. Follow this same "only the listed actions" discipline as later
+phases add role/permission changes — don't audit-log everything by default.
 
 ## Secrets
 

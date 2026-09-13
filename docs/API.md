@@ -52,6 +52,8 @@ SUBJECT_NOT_FOUND, TOPIC_NOT_FOUND
 QUESTION_NOT_FOUND, QUESTION_NOT_APPROVED, QUESTION_VERSION_INVALID,
 INVALID_OPTION
 
+PRODUCT_NOT_FOUND
+
 ORDER_NOT_FOUND, ORDER_ALREADY_PAID, IDEMPOTENCY_CONFLICT
 
 PAYMENT_NOT_FOUND, PAYMENT_VERIFICATION_FAILED, PAYMENT_WEBHOOK_INVALID
@@ -136,16 +138,38 @@ GET  /attempts/:attemptId/result         → shape depends on the test's
                                               IMMEDIATE and no released_at is set yet (Phase 8)
 ```
 
-### Commerce (Student-Facing)
+### Commerce (Student-Facing) — Products/Orders Implemented (Phase 9)
+
+Every route requires `Authorization: Bearer <token>` but no admin
+permission — just a valid session. Order ownership is enforced by
+`orderPolicy.ensureOwnsOrder` (`errorCode FORBIDDEN`), not a permission
+code, mirroring `attemptPolicy`.
 
 ```
-GET  /products
-POST /orders
-GET  /orders/:id
-POST /payments/create
-POST /payments/webhook
-GET  /entitlements
+GET  /products                           → ACTIVE + isActive products only, with prices
+GET  /products/:productId                → single ACTIVE product, with prices + items
+                                            errorCode PRODUCT_NOT_FOUND
+
+POST /orders                             { productId, idempotencyKey }
+                                          → creates a PENDING order, snapshotting the
+                                            product's name and current active price into
+                                            one order_item (never re-priced later — see
+                                            docs/COMMERCE_AND_PAYMENTS.md)
+                                          → 201 on first call; 200 + the same order if
+                                            (userId, idempotencyKey) repeats with the same
+                                            productId (idempotent)
+                                          errorCode PRODUCT_NOT_FOUND — missing/not ACTIVE
+                                          errorCode NOT_FOUND — product has no active price
+                                          errorCode IDEMPOTENCY_CONFLICT — same key reused
+                                            with a different productId
+GET  /orders                             → the current user's own orders
+GET  /orders/:orderId                    → a single order (must be the requester's own)
+                                          errorCode ORDER_NOT_FOUND / FORBIDDEN
 ```
+
+Payment endpoints (`POST /payments/create`, `POST /payments/webhook`) and
+`GET /entitlements` (a student-facing "my entitlements" view) remain
+Phase 10 / not yet built — see below.
 
 ### Admin
 
@@ -307,13 +331,57 @@ PUT    /admin/tests/:testId/rules/:id           requires test.update (DRAFT only
 DELETE /admin/tests/:testId/rules/:id           requires test.update (DRAFT only)
 ```
 
-#### Entitlements — Minimal Admin Grant Implemented (Phase 7)
+#### Commerce — Products/Prices/Items/Orders Implemented (Phase 9)
 
-A small, deliberate slice of Commerce built ahead of Phase 9 — see
-ADR-025. Uses the real `products`/`product_items`/`entitlements` tables.
+All routes require `Authorization: Bearer <token>` plus `product.*`/
+`order.view`. Products soft-delete (`paranoid: true`, like catalog
+entities); prices and items are hard-deleted. Every product-price create/
+update/delete writes an `audit_logs` row (action `product.price_changed`)
+per spec section 46 — plain product/item CRUD is deliberately not audited
+(not in the spec's list).
 
 ```
-POST /admin/entitlements                 requires entitlement.grant
+GET    /admin/products?productType=&status=     requires product.view
+GET    /admin/products/:id                      requires product.view
+                                                 → product + its prices + items
+POST   /admin/products                          requires product.create
+                                                 { name, slug?, description?, productType,
+                                                   status?, displayOrder?, isActive? }
+PUT    /admin/products/:id                      requires product.update  (partial body)
+DELETE /admin/products/:id                      requires product.update  (soft delete)
+
+GET    /admin/products/:id/prices               requires product.view
+POST   /admin/products/:id/prices               requires product.update
+                                                 { currencyCode?, amount, originalAmount?,
+                                                   taxAmount?, validFrom?, validUntil?, isActive? }
+                                                 Audit-logged (action: product.price_changed)
+PUT    /admin/products/:id/prices/:priceId      requires product.update  (partial body)
+                                                 Audit-logged (action: product.price_changed)
+DELETE /admin/products/:id/prices/:priceId      requires product.update
+                                                 Audit-logged (action: product.price_changed)
+
+GET    /admin/products/:id/items                requires product.view
+POST   /admin/products/:id/items                requires product.update
+                                                 { accessType, testId? | testSeriesId? |
+                                                   competitiveExamId? | subjectId?,
+                                                   attemptLimit?, accessDurationDays? }
+                                                 Validated against the same target-column/
+                                                 access_type rule the DB CHECK constraint
+                                                 enforces (ADR-018) — errorCode
+                                                 VALIDATION_ERROR if they don't match
+DELETE /admin/products/:id/items/:itemId        requires product.update
+
+GET    /admin/orders?userId=&status=            requires order.view
+GET    /admin/orders/:orderId                   requires order.view
+                                                 errorCode ORDER_NOT_FOUND
+```
+
+#### Entitlements — Grant Implemented (Phase 7), List/Revoke Implemented (Phase 9)
+
+Uses the real `products`/`product_items`/`entitlements` tables (ADR-025).
+
+```
+POST   /admin/entitlements               requires entitlement.grant
                                           { userId, testId? | productItemId?  (exactly one),
                                             attemptLimit?, validFrom?, validUntil?, reason? }
                                           → 201 + entitlement (new grant), or 200 + entitlement
@@ -322,9 +390,15 @@ POST /admin/entitlements                 requires entitlement.grant
                                           errorCode USER_NOT_FOUND / TEST_NOT_FOUND / NOT_FOUND
                                             (productItemId given but doesn't exist)
                                           Audit-logged (action: entitlement.grant)
+GET    /admin/entitlements?userId=&status=&productId=
+                                          requires entitlement.view
+DELETE /admin/entitlements/:id           requires entitlement.grant
+                                          → sets status=REVOKED, revokedAt=now(); idempotent
+                                            (revoking an already-revoked entitlement returns it
+                                            unchanged, no duplicate audit entry)
+                                          errorCode ENTITLEMENT_NOT_FOUND
+                                          Audit-logged (action: entitlement.revoke)
 ```
-
-No list/browse/revoke endpoint yet — see `docs/KNOWN_ISSUES.md`.
 
 #### Attempts & Results (Admin View) — Implemented (Phase 8)
 
@@ -356,9 +430,9 @@ POST /admin/tests/:testId/results/release     requires result.release
                                                Audit-logged (action: result.release)
 ```
 
-Everything else in this section (products, prices, full order/payment flow,
-students, AI generation, AI job status, settings) is planned but not yet
-implemented.
+Everything else in this section (payment flow, students, AI generation, AI
+job status, settings) is planned but not yet implemented — payments are
+Phase 10, right after Commerce.
 
 ## Conventions
 

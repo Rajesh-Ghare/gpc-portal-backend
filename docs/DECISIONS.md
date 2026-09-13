@@ -983,3 +983,44 @@ Consequences:
   their output overlaps — some duplication is the accepted cost of keeping
   the security-critical path (student-facing) simple enough to audit at a
   glance.
+
+## ADR-031: One `order_items` Row Per Product, Not Per `product_item`
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+`POST /orders` creates exactly one `order_items` row per order, with
+`product_item_id = null`, snapshotting the *product's* name and current
+active price. It does not create one `order_items` row per `product_item`
+belonging to that product.
+
+Reason:
+A product (e.g. an `EXAM_PACKAGE`) can own several `product_items` (one per
+target test, or a mix of target types) that together define what buying the
+product unlocks, but the customer is buying and paying for *the product*,
+not each item individually — there is one price, one line, one thing to
+refund or dispute. `order_items` exists to answer "what did this order buy
+and at what price," not "what will this order eventually entitle." The
+entitlement-creation step (Phase 10, once payment confirmation exists) is
+responsible for iterating all of a paid order's product's `product_items`
+and creating one `entitlements` row per item — that fan-out belongs at
+entitlement-creation time, not at order-creation time, since a product's set
+of items could in principle change before payment completes.
+
+Alternatives:
+One `order_items` row per `product_item` — rejected: duplicates the
+product's name/price across N rows for what is a single purchase decision,
+complicates refund/display logic ("this order has 3 line items but the
+customer paid one price"), and conflates "what was purchased" with "what
+it unlocks."
+
+Consequences:
+- `order_items.product_item_id` is always `null` for now; the column exists
+  for a possible future per-item pricing model, not used yet.
+- The Payment/entitlement-creation step (Phase 10) must resolve
+  `order_item.product_id` → all matching `product_items` itself; it cannot
+  assume a 1:1 `order_item`↔`product_item` mapping.
+- `createOrder()` computes `subtotal`/`tax`/`total` from exactly one
+  `product_prices` row (the current active price for the order's product),
+  never from a client-supplied amount — see `docs/SECURITY.md`.

@@ -120,3 +120,38 @@ export async function findActiveEntitlementForTest(userId: string, test: Test) {
     candidates.map((c) => c.id),
   );
 }
+
+export async function listEntitlements(filter: entitlementRepo.EntitlementFilter = {}) {
+  return entitlementRepo.listEntitlements(filter);
+}
+
+/**
+ * Idempotent: revoking an already-revoked entitlement returns it unchanged
+ * (no duplicate audit entry) rather than erroring — mirrors grantEntitlement's
+ * idempotency on the other side of the same lifecycle.
+ */
+export async function revokeEntitlement(id: string, adminId: string, context: AuditContext = {}) {
+  const entitlement = await entitlementRepo.findEntitlementById(id);
+  if (!entitlement) {
+    throw new AppError(ErrorCode.ENTITLEMENT_NOT_FOUND, 'Entitlement not found', 404);
+  }
+  if (entitlement.status === 'REVOKED') {
+    return entitlement;
+  }
+
+  const beforeData = { status: entitlement.status };
+  await entitlementRepo.revokeEntitlement(entitlement);
+
+  await recordAudit({
+    actorId: adminId,
+    action: 'entitlement.revoke',
+    entityType: 'entitlement',
+    entityId: entitlement.id,
+    beforeData,
+    afterData: { status: entitlement.status, revokedAt: entitlement.revokedAt },
+    ipAddress: context.ipAddress,
+    userAgent: context.userAgent,
+  });
+
+  return entitlement;
+}

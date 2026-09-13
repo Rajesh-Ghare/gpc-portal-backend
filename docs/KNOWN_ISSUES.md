@@ -14,15 +14,19 @@
 
 ## Technical Debt
 
-- **The `product_items` CHECK constraint still has no automated test.**
-  Phase 7 added a direct test of the `attempts` partial unique index
-  (`tests/integration/attempt.test.ts` — inserts two `IN_PROGRESS` rows for
-  the same user/test via the model directly, asserts Postgres rejects the
-  second with `SequelizeUniqueConstraintError`/code `23505`), closing that
-  part of what was previously one broader "no DB constraint tests" item.
-  The `product_items_target_matches_access_type` CHECK constraint (ADR-018)
-  is still only verified manually (Phase 2's session notes). Add a similar
-  direct test for it.
+- **The `product_items` DB-level CHECK constraint still has no automated
+  test against the raw model** (only the app-layer duplicate of the same
+  rule, in `createProductItemSchema`, is test-covered —
+  `tests/integration/commerce.test.ts`). Phase 7 added a direct test of the
+  `attempts` partial unique index (`tests/integration/attempt.test.ts` —
+  inserts two `IN_PROGRESS` rows for the same user/test via the model
+  directly, asserts Postgres rejects the second with
+  `SequelizeUniqueConstraintError`/code `23505`); the
+  `product_items_target_matches_access_type` CHECK constraint (ADR-018)
+  itself is still only verified manually (Phase 2's session notes) plus
+  indirectly via the schema validation Phase 9 added in front of it. Add a
+  test that bypasses the schema and inserts directly via `ProductItem.create`
+  with a mismatched target, asserting Postgres — not Zod — rejects it.
 - **Session duration is a hardcoded constant**, not configurable via
   environment variable (`SESSION_DURATION_MS = 30 days` in
   `src/services/authService.ts`). Fine for now; revisit if a product
@@ -44,11 +48,19 @@
   existence as a side effect of `tags: string[]` on a question payload
   (ADR-022). Fine for V1; add `GET /admin/tags` if an admin UI ever needs a
   tag picker independent of authoring a question.
-- **No entitlement list/browse/revoke endpoint** — only
-  `POST /admin/entitlements` (grant) exists (ADR-025). Verify grants via a
-  direct DB query for now; Phase 9 (Commerce) should add
-  `GET /admin/entitlements` and a revoke action as it builds out full
-  product/order management.
+- **Order cancellation is not implemented.** An order created via
+  `POST /orders` stays `PENDING` forever if the customer abandons checkout —
+  there's no `POST /orders/:id/cancel` and no expiry job. Low priority until
+  Payments (Phase 10) exists, since nothing currently depends on a
+  `PENDING` order ever changing state on its own; revisit once a real
+  payment flow makes "abandoned checkout" a real scenario worth cleaning up.
+- **No pagination on any Phase 9 list endpoint** (`GET /products`,
+  `GET /orders`, `GET /admin/orders`, `GET /admin/entitlements`,
+  `GET /admin/products`) — same gap as every other list endpoint built so
+  far (`docs/API.md`'s Conventions section documents the intended
+  `page`/`pageSize` shape, but no endpoint implements it yet). Fine at
+  current data volumes; add pagination as a cross-cutting pass once any
+  list endpoint's result set could realistically grow unbounded.
 - **`SUBJECT_PACKAGE` entitlements grant no actual test access.**
   `findActiveEntitlementForTest()` deliberately doesn't resolve this access
   type — a test isn't scoped to one subject, so "does this test belong to
@@ -70,10 +82,10 @@
   one); implement alongside the student frontend if per-attempt option
   shuffling turns out to matter for anti-cheating.
 - **Security test coverage has some unchecked boxes** — see
-  `docs/SECURITY.md`'s "Required Security Test Coverage" list. A few items
-  are implied-but-not-separately-asserted (e.g. "student cannot access
-  another student's *result*" is covered by the same ownership check as
-  attempts, but has no dedicated test); others aren't applicable yet
-  (pricing, since Commerce doesn't exist). Close these out as the relevant
-  phase makes them concrete, not by writing tests against not-yet-real
-  features.
+  `docs/SECURITY.md`'s "Required Security Test Coverage" list. Remaining
+  items are implied-but-not-separately-asserted (e.g. "student cannot
+  access another student's *result*" is covered by the same ownership check
+  as attempts, but has no dedicated test) rather than not-yet-applicable —
+  the pricing item was closed out in Phase 9. Close the rest out as the
+  relevant phase makes them concrete, not by writing tests against
+  not-yet-real features.

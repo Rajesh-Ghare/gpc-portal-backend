@@ -7,6 +7,7 @@ import { catalogRouter } from './api/v1/routes/catalog.routes';
 import { questionBankRouter } from './api/v1/routes/questionBank.routes';
 import { testBuilderRouter } from './api/v1/routes/testBuilder.routes';
 import { entitlementRouter } from './api/v1/routes/entitlement.routes';
+import { adminCommerceRouter } from './api/v1/routes/adminCommerce.routes';
 import { studentRouter } from './api/v1/routes/student.routes';
 import { adminExamRouter } from './api/v1/routes/adminExam.routes';
 import { env } from './config/env';
@@ -37,6 +38,7 @@ export function createApp() {
   apiRouter.use('/admin', questionBankRouter);
   apiRouter.use('/admin', testBuilderRouter);
   apiRouter.use('/admin', entitlementRouter);
+  apiRouter.use('/admin', adminCommerceRouter);
   apiRouter.use('/admin', adminExamRouter);
   apiRouter.use('/', studentRouter);
   app.use(env.apiBasePath, apiRouter);

@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 8 - Results (complete, verified against real PostgreSQL + automated tests)
+Phase 9 - Commerce (complete, verified against real PostgreSQL + automated tests)
 
 ## Overall Progress
 
@@ -14,7 +14,7 @@ Phase 8 - Results (complete, verified against real PostgreSQL + automated tests)
 - [x] Test builder
 - [x] Exam engine
 - [x] Results
-- [ ] Commerce
+- [x] Commerce
 - [ ] Payments
 - [ ] AI
 - [ ] Student frontend
@@ -22,77 +22,81 @@ Phase 8 - Results (complete, verified against real PostgreSQL + automated tests)
 - [ ] Testing
 - [ ] Deployment
 
-("Results" = cross-attempt rank/percentile computation, the admin
-result-release workflow, and admin browsing of any student's attempts/
-results. Per-attempt scoring itself was already correct as of Phase 7 —
-this phase adds the parts that only make sense once multiple students have
-taken the same test.)
-
 ## Current Work
 
-Phase 8 is complete and verified. Awaiting user confirmation before
-starting Phase 9 (Commerce: full product/pricing CRUD, order flow — this
-is also the natural point to add `GET /admin/entitlements` list/browse and
-a revoke action, extending rather than replacing Phase 7's minimal grant
-endpoint).
+Phase 9 is complete and verified. Awaiting user confirmation before starting
+Phase 10 (Payments: `PaymentGateway` interface + mock provider, webhook
+verification, order → PAID transition, entitlement creation from a paid
+order's product).
 
-## Completed (Phase 8, this session)
+## Completed (Phase 9, this session)
 
-- **Rank/percentile computation** (`src/utils/rankings.ts`'s
-  `computeRankings` — a pure, unit-tested function; standard competition
-  ranking with ties sharing a rank and the next rank skipping ahead,
-  percentile = share of that test's evaluated attempts scoring strictly
-  lower). Verified both in isolation (5 unit tests covering distinct
-  scores, ties, single-entry, and empty-list edge cases) and end-to-end
-  with 3 real students (1 correct/10 marks, 1 wrong/0, 1 unanswered/0):
-  top scorer got rank 1 / 66.67th percentile, the tied pair both got
-  rank 2 / 0th percentile — matched by hand.
-- **`POST /admin/tests/:testId/results/release`** (`result.release`
-  permission, `resultService.releaseResults`): recomputes rank/percentile
-  for every `EVALUATED` result of a test on every call (safe to repeat as
-  more students finish) and releases (`releasedAt = now()`) any not
-  already released — verified idempotent on the release-timestamp side
-  (`releasedCount: 0` on a second call) while rank/percentile still
-  refresh. Audit-logged (`result.release` — the seventh spec-section-46
-  action now covered).
-- **Admin attempt/result browsing**, built as **separate serializer
-  functions** from the student-facing ones (not a shared function with an
-  `isAdmin` flag) per ADR-030 — closing the exact gap the Phase 7 handover
-  notes flagged:
-  - `GET /admin/attempts?testId=&userId=&status=` /
-    `GET /admin/attempts/:id` (`attempt.view`) —
-    `attemptAdminService.ts`, full detail **including**
-    `is_correct`/`correct_option_id` (verified present in the response,
-    unlike the student-facing endpoint which strips it).
-  - `GET /admin/tests/:testId/results` / `GET /admin/results/:id`
-    (`result.view`) — `resultService.ts`, full result + `result_details`
-    regardless of the test's `show_*` flags (those flags only shape what a
-    *student* sees of their own result).
-- Verified (again) that a student is `FORBIDDEN` from every new admin
-  endpoint, and that `RESULT_NOT_RELEASED` correctly blocks a student's own
-  result view before an admin has released it for a non-`IMMEDIATE`
-  `result_visibility` test.
-- New error code: `RESULT_NOT_FOUND`.
-- No new permission seeder needed — `attempt.view`, `result.view`,
-  `result.release` were already seeded in Phase 1's baseline list and
-  simply went unused until this phase wired them to real routes (same
-  story as `question.*`/`test.*` in Phases 5/6).
+- **Admin product/price/item CRUD** (`src/services/productService.ts`,
+  extending — not replacing — Phase 7's deliberately narrow
+  `productRepository.ts`, per ADR-025's explicit handover note): full
+  create/list/get/update/soft-delete for products; create/list/update/
+  delete for prices; create/list/delete for items. Slug auto-generation +
+  duplicate-slug rejection, matching the catalog/question/test pattern.
+  Every price create/update/delete writes an `audit_logs` row (action
+  `product.price_changed`) — the ninth spec-section-46 action now covered.
+- **Product-item target validation duplicated at the service layer**
+  (`src/validations/product.validation.ts`'s `createProductItemSchema`),
+  matching the DB `CHECK` constraint from ADR-018 rule-for-rule, per the
+  spec's explicit "validate at the application layer too" requirement.
+  Verified both a passing SUBSCRIPTION item (no target columns) and a
+  rejected EXAM_PACKAGE-with-testId mismatch.
+- **Student-facing product browsing** (`src/services/productBrowseService.ts`,
+  `GET /products`, `GET /products/:productId`) — ACTIVE + `isActive` products
+  only, mirroring `testBrowseService.ts`'s published-test scoping.
+- **Order creation** (`src/services/orderService.ts`, `POST /orders`):
+  one order = one product, snapshotting the product's name and current
+  active `product_price` into a single `order_items` row
+  (`product_item_id = null` — see ADR-031 for why per-product, not
+  per-`product_item`). Idempotent on `(userId, idempotencyKey)`: a repeat
+  with the same `productId` returns the existing order (200); a repeat with
+  a *different* `productId` is rejected as `IDEMPOTENCY_CONFLICT` (409).
+  `GET /orders` (own orders) and `GET /orders/:orderId`
+  (`orderPolicy.ensureOwnsOrder`, `errorCode FORBIDDEN` cross-student) round
+  out the student flow; `GET /admin/orders`/`GET /admin/orders/:orderId`
+  (`order.view`) give admin browsing.
+- **Closed the Phase 7 (ADR-025) entitlement gap**: `GET /admin/entitlements`
+  (`entitlement.view`, filterable by `userId`/`status`/`productId`) and
+  `DELETE /admin/entitlements/:id` (`entitlement.grant`, sets
+  `status=REVOKED`/`revokedAt`, idempotent — re-revoking is a no-op with no
+  duplicate audit entry). Verified end-to-end that a revoke actually blocks
+  a subsequent attempt-start (`findActiveEntitlementForTest` filters on
+  `status='ACTIVE'`, so a revoked row is excluded exactly like an expired
+  one) — `ENTITLEMENT_NOT_FOUND` returned as expected.
+- **New error code**: `PRODUCT_NOT_FOUND`.
+- **New permissions** (seeder `20260913100010-commerce-permissions.js`, run
+  against both dev and test databases): `order.view`, `entitlement.view`.
+  `product.view`/`.create`/`.update` (already seeded in Phase 1's baseline,
+  unused until now) activate the same way `question.*`/`test.*` did in
+  Phases 5/6.
+- **Deliberately NOT built this phase** (per the spec's own phase split):
+  `PaymentGateway` interface, mock payment provider, `POST /payments/create`,
+  `POST /payments/webhook`, order cancellation. These are Phase 10 (or, for
+  cancellation, an explicit future item — see `docs/KNOWN_ISSUES.md`).
 
 ### Testing
 
-- **5 new unit tests** (`tests/unit/rankings.test.ts`): distinct-score
-  ranking, tie handling (competition ranking, not dense ranking),
-  percentile-as-share-scored-lower, single-entry (100th percentile), and
-  empty-list.
-- **6 new integration tests** (`tests/integration/results.test.ts`): result
-  access blocked before release, student blocked from releasing, the full
-  release→rank/percentile→idempotent-re-release flow (with the audit log
-  asserted), student can view their result after release, admin attempt
-  view exposes correctness data, student blocked from admin endpoints.
+- **14 new integration tests** (`tests/integration/commerce.test.ts`):
+  student blocked from creating a product, product create + duplicate-slug
+  rejection, price create with audit-log assertion, product-item
+  target-mismatch rejection (422) and a valid SUBSCRIPTION item, student
+  product browsing, order creation + idempotent retry (same key/product),
+  idempotency conflict (same key/different product), cross-student order
+  access denial, student blocked from admin order/entitlement endpoints,
+  admin order listing, entitlement grant→list→idempotent-revoke with a
+  single audit-log row asserted.
+- Manually verified end-to-end against a live server/database first,
+  including the full product→price→item→browse→order→idempotency→
+  entitlement-revoke→attempt-blocked chain, before writing the automated
+  tests — same discipline as every prior phase.
 
 ## In Progress
 
-Nothing — Phase 8 scope is complete.
+Nothing — Phase 9 scope is complete.
 
 ## Blocked
 
@@ -100,26 +104,29 @@ None.
 
 ## Known Issues
 
-Updated this phase (see `docs/KNOWN_ISSUES.md`): the "rank/percentile
-always null" item is resolved (computation exists now) but replaced with a
-narrower one — nothing *automatically* triggers a re-release, so a test
-whose ranking needs to stay fresh as new students finish requires a
-periodic admin action (or a future scheduled job) rather than happening on
-its own.
+Updated this phase (see `docs/KNOWN_ISSUES.md`): the "no entitlement
+list/browse/revoke endpoint" item is resolved; added "order cancellation
+not implemented" and "no pagination on Phase 9 list endpoints" as new,
+low-priority items; narrowed the `product_items` CHECK-constraint testing
+gap to specifically "not tested against the raw model" (the app-layer
+duplicate of the same rule is now tested).
 
 ## Next Recommended Task
 
-Phase 9: Commerce. Per spec sections 17/24: full `products`/`product_prices`/
-`product_items` admin CRUD (Phase 7's `productRepository.ts` was
-deliberately narrow — extend it, don't replace it), the student-facing
-`GET /products`, order creation (`POST /orders`, idempotency-key uniqueness
-already enforced at the DB level from Phase 2), and
-`GET /admin/entitlements` (list/browse) + a revoke action — the two gaps
-Phase 7's ADR-025 explicitly deferred to this phase. Decide the order
-flow's exact snapshot behavior (order_items must snapshot product name/
-price at order time, never re-read live pricing) before implementing, per
-`docs/COMMERCE_AND_PAYMENTS.md`. Payments (mock provider, webhook
-verification) is Phase 10, right after.
+Phase 10: Payments. Per spec sections 18/24: a `PaymentGateway` interface
+(ADR-006) with a `MockPaymentGateway` implementation, `POST
+/payments/create` (creates a `payments` row PENDING + a provider reference
+for an order), and `POST /payments/webhook` (signature verification, event
+idempotency via `payment_webhook_events`, amount/currency verification
+against the order's `total_amount`, order → `PAID`/`paid_at`, and — this is
+the part that finally makes orders do something — entitlement creation for
+every `product_item` belonging to the paid order's product). The mock
+gateway must still go through a webhook-shaped confirmation path (a
+"simulate provider webhook" endpoint), not a shortcut, so the
+acceptance-criteria flow ("purchase using mock payment → entitlement
+created") is testable end-to-end without bypassing verification — see
+`docs/COMMERCE_AND_PAYMENTS.md`'s Payment Flow section for the exact
+sequence already documented.
 
 ## Last Updated
 
@@ -127,71 +134,91 @@ verification) is Phase 10, right after.
 
 ## Last Development Session
 
-Implemented and verified Phase 8 (Results): a pure, unit-tested
-rank/percentile computation function using standard competition ranking,
-wired into an idempotent admin result-release action that also
-audit-logs (the seventh spec-section-46 action covered), and admin
-attempt/result browsing built as deliberately separate serializer
-functions from the student-facing ones — directly following through on a
-warning Phase 7's own handover notes left about not letting the
-security-sensitive student path grow an "admin mode" flag. Verified
-end-to-end with 3 real students producing a real tie, confirmed by hand.
+Implemented and verified Phase 9 (Commerce): full admin product/price/item
+CRUD extending Phase 7's deliberately narrow `productRepository.ts`
+(ADR-025's explicit handover instruction), student-facing product browsing,
+an idempotent single-product order-creation flow with server-computed
+pricing (ADR-031 documents why `order_items` is per-product, not
+per-`product_item`), and the entitlement list/revoke endpoints Phase 7
+explicitly deferred here — verified end-to-end that revoking an entitlement
+actually blocks a subsequent attempt-start. Every product-price change is
+audit-logged (the ninth spec-section-46 action). Payments (mock gateway +
+webhook-verified entitlement creation) is next.
 
 ## Important Files Changed
 
-- `src/errors/errorCodes.ts` (modified — `RESULT_NOT_FOUND`)
-- `src/utils/rankings.ts` (created)
-- `src/repositories/{resultRepository.ts,attemptAdminRepository.ts}` (created)
-- `src/services/{resultService.ts,attemptAdminService.ts}` (created)
-- `src/controllers/adminExamController.ts` (created)
-- `src/api/v1/routes/adminExam.routes.ts` (created)
-- `src/app.ts` (modified — mounts `adminExamRouter`)
-- `src/models/{Result.ts,Attempt.ts}` (modified — `user`/`test` association mixin types)
-- `tests/unit/rankings.test.ts`, `tests/integration/results.test.ts` (created)
-- `docs/EXAM_ENGINE.md` (Rank & Percentile section added), `docs/API.md`
-  (admin attempts/results endpoints documented), `docs/AUTHENTICATION.md`
-  (permission updates), `docs/SECURITY.md` (admin-view exception documented,
-  coverage checklist updated), `docs/DECISIONS.md` (ADR-029, ADR-030)
+- `src/errors/errorCodes.ts` (modified — `PRODUCT_NOT_FOUND`)
+- `src/models/{Product.ts,Order.ts,Entitlement.ts}` (modified — `NonAttribute`
+  association declarations for `prices`/`items`/`product`/`productItem`)
+- `src/repositories/productRepository.ts` (extended — product + item CRUD
+  added alongside the existing Phase 7 functions)
+- `src/repositories/{productPriceRepository.ts,orderRepository.ts}` (created)
+- `src/repositories/entitlementRepository.ts` (extended — list/revoke)
+- `src/services/{productService.ts,productBrowseService.ts,orderService.ts}` (created)
+- `src/services/entitlementService.ts` (extended — list/revoke)
+- `src/validations/{product.validation.ts,order.validation.ts}` (created)
+- `src/policies/orderPolicy.ts` (created)
+- `src/controllers/{productController.ts,productBrowseController.ts,orderController.ts}` (created)
+- `src/controllers/entitlementController.ts` (extended — list/revoke)
+- `src/api/v1/routes/adminCommerce.routes.ts` (created)
+- `src/api/v1/routes/entitlement.routes.ts`, `src/api/v1/routes/student.routes.ts` (modified)
+- `src/app.ts` (modified — mounts `adminCommerceRouter`)
+- `src/seeders/20260913100010-commerce-permissions.js` (created — `order.view`, `entitlement.view`)
+- `tests/integration/commerce.test.ts` (created)
+- `docs/API.md`, `docs/COMMERCE_AND_PAYMENTS.md`, `docs/AUTHENTICATION.md`,
+  `docs/SECURITY.md`, `docs/DECISIONS.md` (ADR-031), `docs/KNOWN_ISSUES.md`,
+  `docs/CHANGELOG.md`
 
 ## Database Changes
 
-None (no migrations) — Phase 8 used the existing `results`/`result_details`
-tables and columns (`rank`, `percentile`, `released_at`) from Phase 2 as-is.
+None (no migrations) — Phase 9 used the existing `products`/`product_prices`/
+`product_items`/`orders`/`order_items`/`entitlements` tables from Phase 2
+as-is. One new seeder for the two new permission codes.
 
 ## API Changes
 
 Added (see `docs/API.md` for full request/response shapes):
-- `GET /admin/attempts`, `GET /admin/attempts/:attemptId`
-- `GET /admin/tests/:testId/results`, `GET /admin/results/:id`
-- `POST /admin/tests/:testId/results/release`
+- `GET/POST /admin/products`, `GET/PUT/DELETE /admin/products/:id`
+- `GET/POST /admin/products/:id/prices`, `PUT/DELETE /admin/products/:id/prices/:priceId`
+- `GET/POST /admin/products/:id/items`, `DELETE /admin/products/:id/items/:itemId`
+- `GET /admin/orders`, `GET /admin/orders/:orderId`
+- `GET /products`, `GET /products/:productId`
+- `POST /orders`, `GET /orders`, `GET /orders/:orderId`
+- `GET /admin/entitlements`, `DELETE /admin/entitlements/:id`
 
 ## Testing Status
 
 - `tests/unit/app.test.ts` — 1 test (`/health`).
-- `tests/unit/rankings.test.ts` — 5 tests (this phase).
+- `tests/unit/rankings.test.ts` — 5 tests (Phase 8).
 - `tests/integration/auth.test.ts` — 5 tests (Phase 3).
 - `tests/integration/catalog.test.ts` — 6 tests (Phase 4).
 - `tests/integration/questionBank.test.ts` — 7 tests (Phase 5).
 - `tests/integration/testBuilder.test.ts` — 5 tests (Phase 6).
 - `tests/integration/attempt.test.ts` — 5 tests (Phase 7).
-- `tests/integration/results.test.ts` — 6 tests (this phase).
-- Total: 40 tests, all passing against the real test database.
-- Still open: the `product_items` CHECK constraint has no automated test
-  (see `docs/KNOWN_ISSUES.md`); a few Security Test Coverage checklist
-  items remain implied-but-not-separately-asserted.
+- `tests/integration/results.test.ts` — 6 tests (Phase 8).
+- `tests/integration/commerce.test.ts` — 14 tests (this phase).
+- Total: 54 tests, all passing against the real test database.
+- Still open: the `product_items` CHECK constraint has no test against the
+  raw model bypassing the app-layer schema (see `docs/KNOWN_ISSUES.md`); a
+  few Security Test Coverage checklist items remain
+  implied-but-not-separately-asserted.
 
 ## Handover Notes
 
-- **Never add an `isAdmin`/`includeCorrectness` flag to
-  `attemptService.getAttemptDetail`/`getResult`.** Any future admin-facing
-  attempt/result feature belongs in `attemptAdminService.ts`/
-  `resultService.ts` as a new named function. This is ADR-030, written
-  specifically because Phase 7 shipped (and caught) the exact bug this
-  guards against.
-- `POST /admin/tests/:testId/results/release` is the *only* thing that
-  computes rank/percentile — there's no automatic trigger. If a future
-  requirement needs rankings to stay continuously fresh (e.g. a live
-  leaderboard), that's a new scheduled-job feature, not a change to
-  `submitAttempt()` (ADR-027 already rejected computing it inline there).
+- **`order_items` is one row per product, not one per `product_item`.**
+  See ADR-031. Phase 10's payment-confirmation → entitlement-creation code
+  must resolve `order_item.product_id` → all of that product's
+  `product_items` itself; don't assume a 1:1 `order_item`↔`product_item`
+  mapping.
+- **`createOrder()` never re-reads price at any point after order
+  creation.** The order's `subtotalAmount`/`taxAmount`/`totalAmount` are
+  frozen at creation time from whatever `product_prices` row was active
+  then. Phase 10's payment verification must check the *order's* stored
+  `totalAmount` against the payment provider's amount — never re-derive a
+  fresh price from the product at payment time.
+- **Product-item target validation exists in two places on purpose**
+  (`createProductItemSchema`'s `superRefine` and the DB `CHECK`
+  constraint) — keep both in sync if `access_type`'s target-column mapping
+  ever changes (e.g. a new access type is added).
 - Read `CLAUDE.md` and this file first in any new session before writing
   code.

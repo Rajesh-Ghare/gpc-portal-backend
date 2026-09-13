@@ -13,8 +13,21 @@ products (INDIVIDUAL_TEST | TEST_SERIES | SUBJECT_PACKAGE | EXAM_PACKAGE |
 
 Validation rule: a `product_items` row must supply the target column matching
 its `access_type` (e.g. `access_type = INDIVIDUAL_TEST` requires `test_id`, not
-`test_series_id`). Enforced in the service layer (and ideally a DB check
-constraint) — never allow a product_item with an ambiguous or missing target.
+`test_series_id`). Enforced at both layers: the DB `CHECK` constraint
+(ADR-018, `product_items_target_matches_access_type`) and, as of Phase 9, the
+same rule again in `src/validations/product.validation.ts`'s
+`createProductItemSchema` (`errorCode VALIDATION_ERROR`, 422) — never allow a
+product_item with an ambiguous or missing target.
+
+**Implemented (Phase 9)**: full admin product/price/item CRUD
+(`src/services/productService.ts`, `POST`/`GET`/`PUT`/`DELETE
+/admin/products[/:id/prices|/:id/items]`, `product.view`/`.create`/`.update`
+permissions) and student-facing browsing of ACTIVE products
+(`src/services/productBrowseService.ts`, `GET /products`,
+`GET /products/:productId`). Products soft-delete; prices/items hard-delete.
+Every price create/update/delete is audit-logged
+(action `product.price_changed`) per spec section 46 — plain product/item
+CRUD is not, since it isn't in that list.
 
 ## Order Flow
 
@@ -29,6 +42,22 @@ POST /orders { productId }
 `orders` uniqueness on `(user_id, idempotency_key)` means a retried "create
 order" request with the same idempotency key returns the same order rather
 than creating a duplicate.
+
+**Implemented (Phase 9)**: `POST /orders` (`src/services/orderService.ts`).
+One order = one product: the current active `product_price` (the first
+`is_active` row whose `valid_from`/`valid_until` window covers now) is
+snapshotted into a single `order_items` row with `product_item_id = null`
+(entitlement creation, once Payments/Phase 10 exists, will iterate ALL of the
+product's `product_items` when granting access — an order_item points at the
+*product*, not one specific item). Idempotency is enforced in the service
+layer, not just the DB unique index: the same `(userId, idempotencyKey)` with
+the same `productId` returns the existing order (200); the same key with a
+*different* `productId` is rejected as `IDEMPOTENCY_CONFLICT` (409) rather
+than silently returning the wrong order. `GET /orders` (own orders) and
+`GET /orders/:orderId` (own order, `orderPolicy.ensureOwnsOrder`) round out
+the student-facing flow; `GET /admin/orders`/`GET /admin/orders/:orderId`
+(`order.view`) give admin browsing. Order cancellation is not implemented
+(see `docs/KNOWN_ISSUES.md`).
 
 ## Payment Flow
 
@@ -90,16 +119,27 @@ resolves `INDIVIDUAL_TEST`/`EXAM_PACKAGE`/`TEST_SERIES`/blanket
 `SUBSCRIPTION`/`ALL_ACCESS` matches (not `SUBJECT_PACKAGE` — see
 `docs/DECISIONS.md` ADR-026).
 
-## Admin Overrides — Implemented (Phase 7)
+## Admin Overrides — Grant Implemented (Phase 7), List/Revoke Implemented (Phase 9)
 
 `POST /admin/entitlements` (`entitlement.grant` permission) lets an admin
-grant an entitlement manually (e.g. comped access, or — until Order/Payment
-flows exist in Phase 9/10 — the *only* way to grant one at all). Goes
+grant an entitlement manually (e.g. comped access, or — until the Payment
+flow exists in Phase 10 — the *only* way an entitlement backed by a real
+purchase gets created, since orders currently stop at `PENDING`). Goes
 through the real `entitlements` table, is idempotent (returns the existing
 active entitlement rather than duplicating), sets `granted_by` to the
 admin's user id, and writes an `audit_logs` entry
 (action `entitlement.grant`). Given a `testId`, it finds-or-creates the
 minimal `INDIVIDUAL_TEST` product/product_item needed — see ADR-025 for the
 full reasoning on why this exists ahead of full Commerce, and
-`docs/API.md` for the request/response shape. No revoke or list/browse
-endpoint exists yet (`docs/KNOWN_ISSUES.md`).
+`docs/API.md` for the request/response shape.
+
+**Implemented (Phase 9)**: `GET /admin/entitlements` (`entitlement.view` —
+filterable by `userId`/`status`/`productId`) and `DELETE
+/admin/entitlements/:id` (`entitlement.grant` — sets `status=REVOKED`,
+`revoked_at=now()`; idempotent, re-revoking is a no-op with no duplicate
+audit entry; audit-logged as `entitlement.revoke`). Revoking correctly
+removes the test-start entitlement match: `findActiveEntitlementForTest()`
+filters on `status='ACTIVE'`, so a revoked entitlement is excluded exactly
+like an expired one — verified manually (grant → attempt allowed → revoke →
+attempt blocked with `ENTITLEMENT_NOT_FOUND`) and in
+`tests/integration/commerce.test.ts`.

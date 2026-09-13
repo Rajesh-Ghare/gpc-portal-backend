@@ -14,3 +14,5 @@ entitlementRouter.post(
   validateBody(grantEntitlementSchema),
   controller.grantEntitlement,
 );
+entitlementRouter.get('/entitlements', requirePermission('entitlement.view'), controller.listEntitlements);
+entitlementRouter.delete('/entitlements/:id', requirePermission('entitlement.grant'), controller.revokeEntitlement);

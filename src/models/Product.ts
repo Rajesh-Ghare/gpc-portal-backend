@@ -1,4 +1,14 @@
-import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, Sequelize } from 'sequelize';
+import {
+  CreationOptional,
+  DataTypes,
+  InferAttributes,
+  InferCreationAttributes,
+  Model,
+  NonAttribute,
+  Sequelize,
+} from 'sequelize';
+import type { ProductPrice } from './ProductPrice';
+import type { ProductItem } from './ProductItem';
 
 export class Product extends Model<InferAttributes<Product>, InferCreationAttributes<Product>> {
   declare id: CreationOptional<string>;
@@ -15,6 +25,9 @@ export class Product extends Model<InferAttributes<Product>, InferCreationAttrib
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
   declare deletedAt: CreationOptional<Date | null>;
+
+  declare prices?: NonAttribute<ProductPrice[]>;
+  declare items?: NonAttribute<ProductItem[]>;
 
   static associate(models: {
     ProductPrice: typeof import('./ProductPrice').ProductPrice;

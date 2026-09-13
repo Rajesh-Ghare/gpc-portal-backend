@@ -1,4 +1,13 @@
-import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, Sequelize } from 'sequelize';
+import {
+  CreationOptional,
+  DataTypes,
+  InferAttributes,
+  InferCreationAttributes,
+  Model,
+  NonAttribute,
+  Sequelize,
+} from 'sequelize';
+import type { OrderItem } from './OrderItem';
 
 export class Order extends Model<InferAttributes<Order>, InferCreationAttributes<Order>> {
   declare id: CreationOptional<string>;
@@ -16,6 +25,8 @@ export class Order extends Model<InferAttributes<Order>, InferCreationAttributes
   declare metadata: CreationOptional<Record<string, unknown>>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
+
+  declare items?: NonAttribute<OrderItem[]>;
 
   static associate(models: {
     User: typeof import('./User').User;

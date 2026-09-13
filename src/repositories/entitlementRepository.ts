@@ -46,3 +46,33 @@ export async function incrementAttemptsUsed(entitlement: Entitlement) {
 export async function findUserById(id: string) {
   return User.findByPk(id);
 }
+
+export interface EntitlementFilter {
+  userId?: string;
+  status?: string;
+  productId?: string;
+}
+
+export async function listEntitlements(filter: EntitlementFilter = {}) {
+  const where: Record<string, unknown> = {};
+  if (filter.userId) where.userId = filter.userId;
+  if (filter.status) where.status = filter.status;
+  if (filter.productId) where.productId = filter.productId;
+
+  return Entitlement.findAll({
+    where,
+    include: [{ association: 'product' }, { association: 'productItem' }],
+    order: [['createdAt', 'DESC']],
+  });
+}
+
+export async function findEntitlementById(id: string) {
+  return Entitlement.findByPk(id, { include: [{ association: 'product' }, { association: 'productItem' }] });
+}
+
+export async function revokeEntitlement(entitlement: Entitlement) {
+  entitlement.status = 'REVOKED';
+  entitlement.revokedAt = new Date();
+  await entitlement.save();
+  return entitlement;
+}
