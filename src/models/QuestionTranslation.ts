@@ -1,4 +1,5 @@
-import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, Sequelize } from 'sequelize';
+import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, NonAttribute, Sequelize } from 'sequelize';
+import type { QuestionVersion } from './QuestionVersion';
 
 export class QuestionTranslation extends Model<
   InferAttributes<QuestionTranslation>,
@@ -12,6 +13,8 @@ export class QuestionTranslation extends Model<
   declare solutionSteps: string | null;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
+
+  declare questionVersion?: NonAttribute<QuestionVersion>;
 
   static associate(models: { QuestionVersion: typeof import('./QuestionVersion').QuestionVersion }) {
     QuestionTranslation.belongsTo(models.QuestionVersion, { foreignKey: 'questionVersionId', as: 'questionVersion' });

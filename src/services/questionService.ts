@@ -120,7 +120,20 @@ async function createVersionRows(
   return version;
 }
 
-export async function createQuestion(input: CreateQuestionInput, createdBy: string) {
+export interface AiSourceMetadata {
+  generationJobId: string;
+  provider: string;
+  model?: string | null;
+  promptVersion?: string | null;
+}
+
+/**
+ * `aiMetadata` is deliberately not part of `createQuestionSchema` — it's
+ * never accepted from a request body (that would let any admin-create
+ * request falsely claim AI provenance). Only `aiService.approveItem()`
+ * passes it, after a human has actually reviewed the generated content.
+ */
+export async function createQuestion(input: CreateQuestionInput, createdBy: string, aiMetadata?: AiSourceMetadata) {
   await getSubjectOrThrow(input.subjectId);
   if (input.topicId) {
     const topic = await getTopicOrThrow(input.topicId);
@@ -141,6 +154,13 @@ export async function createQuestion(input: CreateQuestionInput, createdBy: stri
         difficulty: input.difficulty ?? 'MEDIUM',
         defaultLanguageCode: input.defaultLanguageCode ?? 'en',
         createdBy,
+        sourceType: aiMetadata ? 'AI_GENERATED' : 'MANUAL',
+        generatedByAi: Boolean(aiMetadata),
+        aiProvider: aiMetadata?.provider ?? null,
+        aiModel: aiMetadata?.model ?? null,
+        generationJobId: aiMetadata?.generationJobId ?? null,
+        generationPromptVersion: aiMetadata?.promptVersion ?? null,
+        generatedAt: aiMetadata ? new Date() : null,
       },
       { transaction },
     );

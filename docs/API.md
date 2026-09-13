@@ -446,8 +446,40 @@ POST /admin/tests/:testId/results/release     requires result.release
                                                Audit-logged (action: result.release)
 ```
 
-Everything else in this section (students, AI generation, AI job status,
-settings) is planned but not yet implemented.
+#### AI Question Generation — Implemented (Phase 11)
+
+All routes require `Authorization: Bearer <token>` plus `ai.generate` (the
+only permission this module uses). Generation runs synchronously within
+`POST /admin/ai/jobs` — see `docs/AI.md`.
+
+```
+GET  /admin/ai/jobs?status=&subjectId=            requires ai.generate
+GET  /admin/ai/jobs/:jobId                        requires ai.generate
+                                                   → job row + items[]
+                                                   errorCode AI_JOB_NOT_FOUND
+POST /admin/ai/jobs                               requires ai.generate
+                                                   { subjectId, topicId?, competitiveExamId?,
+                                                     questionType?, difficulty?, languageCode?,
+                                                     requestedCount (1-20) }
+                                                   → job (status COMPLETED) + generated items
+                                                   errorCode AI_GENERATION_FAILED (502) if the
+                                                     provider itself throws
+POST /admin/ai/jobs/:jobId/items/:itemId/approve  requires ai.generate
+                                                   → creates + immediately publishes a real question
+                                                     (questionService.createQuestion +
+                                                     approveQuestion — same path as manual
+                                                     authoring), stamped with AI provenance
+                                                   errorCode VALIDATION_ERROR (409) if the item
+                                                     isn't PENDING_REVIEW
+                                                   Audit-logged (action: question.approve)
+POST /admin/ai/jobs/:jobId/items/:itemId/reject   requires ai.generate
+                                                   { reason?: string }
+                                                   errorCode VALIDATION_ERROR (409) if the item
+                                                     isn't PENDING_REVIEW
+```
+
+Everything else in this section (students, settings) is planned but not
+yet implemented.
 
 ## Conventions
 

@@ -1072,3 +1072,56 @@ Consequences:
   `docs/COMMERCE_AND_PAYMENTS.md`'s Payment Flow section for why that's a
   deliberate simplification acceptable for a mock-only provider, and a gap
   a real provider integration must not repeat.
+
+## ADR-033: AI-Approved Questions Are Created Through the Same createQuestion() Path, With Provenance Passed Out-of-Band
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+Approving an `ai_generation_items` row calls the exact same
+`questionService.createQuestion()` transaction a manually-authored question
+uses — there is no separate "AI question" table, service, or creation code
+path. AI provenance (`source_type = 'AI_GENERATED'`, `generated_by_ai`,
+`ai_provider`, `ai_model`, `generation_job_id`, `generation_prompt_version`,
+`generated_at`) is passed via a new optional third parameter
+(`aiMetadata`) that `createQuestion()` accepts but that is **not** part of
+`createQuestionSchema` — the Zod schema validating `POST
+/admin/questions`'s request body. Only `aiService.approveItem()` supplies
+it, and only after that specific item has actually been reviewed.
+
+Reason:
+Two things had to both be true: (1) an AI-sourced question must end up as
+a completely ordinary row in `questions`/`question_versions` — usable by
+every existing test-builder/attempt/exam-engine code path with zero special
+casing, since none of that code should ever need to know or care where a
+question came from; (2) no client request should be able to make a
+question claim AI provenance (or, worse, quietly bypass provenance
+tracking for an actually-AI-generated question) by sending an extra field
+in a request body. A shared creation function with an internal-only extra
+parameter satisfies both: the public API surface (the schema) stays exactly
+what it was before this phase, while the one legitimate internal caller
+gets to set fields the schema deliberately excludes.
+
+Alternatives:
+A separate `createQuestionFromAiItem()` function duplicating
+`createQuestion()`'s transaction — rejected as the same "don't build a
+parallel path when the real one already does what you need" mistake
+ADR-030 and ADR-032 both already reject in this codebase, just for
+question creation instead of attempt serialization or payment
+confirmation.
+Adding `sourceType`/`generatedByAi`/etc. to `createQuestionSchema` as
+optional client-settable fields — rejected: it would let any
+`POST /admin/questions` caller (anyone with `question.create`) claim
+false AI provenance, and provenance is exactly the kind of fact that must
+only ever be set by the code path that actually knows it's true.
+
+Consequences:
+- Approving an AI item and immediately publishing it are one action, not
+  two — the admin's approval click *is* both `createQuestion()` and
+  `approveQuestion()`, audited once as `question.approve` (no separate
+  `ai.item_approved` audit action — see `docs/SECURITY.md`).
+- Any future second source of AI-ish content (e.g. bulk-import,
+  translation-service-generated content) that needs its own provenance
+  columns should extend `aiMetadata`'s shape or add a sibling optional
+  parameter, never widen `createQuestionSchema` to accept it from a client.

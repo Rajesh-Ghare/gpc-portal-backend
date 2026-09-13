@@ -108,6 +108,12 @@ see ADR-024). `product.view`/`.create`/`.update` (also already seeded in
 Phase 1's baseline) went unused until Phase 9 wired them to the new
 product/price/item admin CRUD — `update` is reused to gate deletion here
 too (no separate `product.delete`), same pattern as `question`/`test`.
+`ai.generate` (also already seeded in Phase 1's baseline) went unused until
+Phase 11 wired it to the entire `/admin/ai/*` module — unlike every other
+module, there's no separate `.view`/`.approve` split; one permission gates
+job creation, listing, and item approve/reject alike, since the module's
+scope is small enough that splitting it would add ceremony without adding
+real access control granularity.
 Extend as each further admin module is built.
 
 ```

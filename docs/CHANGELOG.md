@@ -129,6 +129,21 @@
   grant's `ADMIN_GRANT`/adminId) and still audit-logged. Verified manually
   end-to-end (including a hand-signed tampered-amount payload proving
   amount verification isn't decorative) and via 10 new integration tests.
+- AI: an `AIService` interface (ADR-006) with a `MockAIProvider`
+  implementing all five documented methods, though only `generateQuestions`
+  is wired to an endpoint. `POST /admin/ai/jobs` runs generation
+  synchronously, creating one `ai_generation_items` row per candidate
+  (flagging an exact-normalized-text duplicate match against approved
+  questions in the same subject) and marking the job COMPLETED/FAILED.
+  `POST /admin/ai/jobs/:jobId/items/:itemId/approve` creates a real
+  question through the exact same `questionService.createQuestion()`/
+  `approveQuestion()` path manual authoring uses (no parallel "AI
+  question" path — ADR-033) and stamps it with AI provenance via an
+  internal-only parameter no client request can forge; `.../reject`
+  records a reason and creates nothing. `ai.generate` (seeded since Phase
+  1, unused until now) is the only permission the module needs. Verified
+  manually end-to-end (including confirming AI metadata never reaches a
+  student-facing attempt payload) and via 6 new integration tests.
 
 ### Changed
 
@@ -176,7 +191,7 @@
   `docs/EXAM_ENGINE.md`, `docs/AUTHENTICATION.md`,
   `docs/COMMERCE_AND_PAYMENTS.md`, `docs/AI.md`, `docs/SECURITY.md`,
   `docs/DEPLOYMENT.md`, `docs/TESTING.md`, `docs/DECISIONS.md`
-  (ADR-001 through ADR-032), `docs/KNOWN_ISSUES.md`,
+  (ADR-001 through ADR-033), `docs/KNOWN_ISSUES.md`,
   `docs/DEVELOPMENT_STATUS.md`, and root `CLAUDE.md`.
 - `docs/DATABASE.md` rewritten to describe the as-built schema (migration
   order, integrity rules, seeding, and modeling decisions made where the
@@ -205,3 +220,12 @@
   `docs/DECISIONS.md` gained ADR-032 (mock payment confirmation reuses the
   real webhook handler); `docs/KNOWN_ISSUES.md` added the "no real
   PaymentGateway yet" and "mock signs parsed body, not raw bytes" items.
+- `docs/AI.md` rewritten end to end for the as-built generation-job/review
+  workflow; `docs/API.md` gained the `/admin/ai/*` endpoints;
+  `docs/AUTHENTICATION.md` documents `ai.generate`'s activation and its
+  deliberate single-permission scope; `docs/SECURITY.md`'s Auditability
+  section and Required Security Test Coverage checklist updated for the
+  AI-review guarantees; `docs/DECISIONS.md` gained ADR-033 (AI-approved
+  questions reuse `createQuestion()`, provenance passed out-of-band);
+  `docs/KNOWN_ISSUES.md` added the synchronous-generation, unwired-
+  interface-methods, and simple-duplicate-detection items.

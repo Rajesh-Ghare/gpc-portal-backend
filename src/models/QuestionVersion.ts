@@ -9,6 +9,7 @@ import {
 } from 'sequelize';
 import type { QuestionTranslation } from './QuestionTranslation';
 import type { QuestionOption } from './QuestionOption';
+import type { Question } from './Question';
 
 export class QuestionVersion extends Model<InferAttributes<QuestionVersion>, InferCreationAttributes<QuestionVersion>> {
   declare id: CreationOptional<string>;
@@ -24,6 +25,7 @@ export class QuestionVersion extends Model<InferAttributes<QuestionVersion>, Inf
 
   declare translations?: NonAttribute<QuestionTranslation[]>;
   declare options?: NonAttribute<QuestionOption[]>;
+  declare question?: NonAttribute<Question>;
 
   static associate(models: {
     Question: typeof import('./Question').Question;

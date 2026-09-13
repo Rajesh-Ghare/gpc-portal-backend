@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 10 - Payments (complete, verified against real PostgreSQL + automated tests)
+Phase 11 - AI (complete, verified against real PostgreSQL + automated tests)
 
 ## Overall Progress
 
@@ -16,7 +16,7 @@ Phase 10 - Payments (complete, verified against real PostgreSQL + automated test
 - [x] Results
 - [x] Commerce
 - [x] Payments
-- [ ] AI
+- [x] AI
 - [ ] Student frontend
 - [ ] Admin frontend
 - [ ] Testing
@@ -24,93 +24,91 @@ Phase 10 - Payments (complete, verified against real PostgreSQL + automated test
 
 ## Current Work
 
-Phase 10 is complete and verified. Awaiting user confirmation before
-starting Phase 11 (AI: `AIService` interface + mock provider, AI-assisted
-question generation jobs, admin review of generated questions before they
-enter the normal question-bank approval flow).
+Phase 11 is complete and verified. Awaiting user confirmation before
+starting Phase 12 (Student Frontend) — the backend's API surface is now
+functionally complete for the full student journey (browse → purchase →
+attempt → result) and the full admin authoring/review journey (catalog →
+question bank incl. AI-assisted → test builder → publish → results →
+commerce → payments), per `docs/API.md`.
 
-## Completed (Phase 10, this session)
+## Completed (Phase 11, this session)
 
-- **`PaymentGateway` interface** (`src/strategies/payment/PaymentGateway.ts`,
-  ADR-006) — `createPayment(order)` and `verifyWebhook(rawBody, signature)`.
-  No business logic outside the concrete gateway implementation and the
-  `src/strategies/payment/index.ts` factory (`getPaymentGateway()`, selected
-  by `PAYMENT_PROVIDER`) knows a provider's name or wire format — mirrors
-  the existing `OtpProvider`/`getOtpProvider()` pattern exactly.
-- **`MockPaymentGateway`** (`src/strategies/payment/MockPaymentGateway.ts`):
-  `createPayment()` returns a fake `mock_order_<orderId>` reference;
-  webhook payloads are HMAC-signed with a mock-only secret and verified for
-  real — the mock provider never bypasses signature checking, it just
-  doesn't call out to a real network.
-- **`POST /payments/create`** (`src/services/paymentService.ts`): creates a
-  PENDING `payments` row via the gateway for an order the caller owns
-  (`orderPolicy.ensureOwnsOrder`). Idempotent (returns the existing PENDING
-  payment on retry) and rejects an already-`PAID` order
-  (`ORDER_ALREADY_PAID`, 409).
-- **`POST /payments/webhook`** (no session auth — the caller is the payment
-  provider, authenticated by signature, not a token): verifies the
-  signature first (rejects before touching any state on failure), dedupes
-  on `(provider, providerEventId)` via `payment_webhook_events`, then
-  re-verifies amount/currency against the *order's own stored total* —
-  never trusts the webhook body's amount blindly. Only then: one
-  transaction flips `payments`→`PAID`/`paidAt` and `orders`→`PAID`/`paidAt`,
-  followed by `entitlementService.createEntitlementsForPaidOrder(order)`
-  fanning out one entitlement per `product_item` on the order's product
-  (ADR-031's fan-out point), skipping any item the user already has an
-  active entitlement for.
-- **`POST /payments/:paymentId/simulate`** (dev/test-only, 404s unless
-  `PAYMENT_PROVIDER=mock`): builds and HMAC-signs a webhook payload with
-  `MockPaymentGateway.buildSignedWebhook()` and calls the *real*
-  `processWebhook()` — not a parallel "just mark it paid" shortcut. See
-  ADR-032 for why this reuse (not a separate mock-confirm code path) is
-  required, not just convenient.
-- **Purchase-created entitlements are marked distinctly from admin
-  grants**: `grantedBy: null` + `metadata.source: 'PURCHASE'` (vs. an
-  admin's `grantedBy: <adminId>` + `metadata.source: 'ADMIN_GRANT'`), and
-  still audit-logged (`action: entitlement.grant`, `actorId: null`) — the
-  tenth spec-section-46 action instance covered, now including a
-  system-triggered (not just admin-triggered) case.
-- **Full acceptance-criteria flow verified end-to-end manually against a
-  live server**: browse product → create order → create payment → simulate
-  webhook success → order `PAID` + entitlement created → attempt-start now
-  succeeds where it previously returned `ENTITLEMENT_NOT_FOUND`. Also
-  manually verified: forged/missing webhook signature rejected (state
-  unchanged), validly-signed-but-tampered-amount webhook rejected (state
-  unchanged), replayed webhook event ignored, cross-student ownership
-  blocked on both `create` and `simulate`, `ORDER_ALREADY_PAID` on a second
-  payment attempt for a paid order.
-- **No new error codes or permissions needed** — `PAYMENT_NOT_FOUND`,
-  `PAYMENT_VERIFICATION_FAILED`, `PAYMENT_WEBHOOK_INVALID`,
-  `ORDER_ALREADY_PAID` were all already seeded/defined in earlier phases
-  and simply went unused until now (same "activate a dormant code" pattern
-  as `question.*`/`test.*`/`product.*` before it). No admin permission
-  gates `/payments/*` — every route is either "owns this order" (policy) or
-  provider-signature-verified (the webhook), matching the attempt/order
-  pattern rather than the admin-CRUD pattern.
-- **Deliberately NOT built this phase**: a real (non-mock) `PaymentGateway`
-  implementation, raw-byte webhook signature verification (the mock
-  gateway signs the parsed JSON body — documented as a gap a real
-  integration must not repeat, see `docs/KNOWN_ISSUES.md`), order
-  cancellation, a student-facing `GET /entitlements` view.
+- **`AIService` interface** (`src/strategies/ai/AIService.ts`, ADR-006) —
+  `generateQuestions`, `translateQuestion`, `generateExplanation`,
+  `validateQuestion`, `classifyDifficulty`, matching `docs/AI.md`'s
+  original contract exactly. `MockAIProvider` implements all five with
+  deterministic, obviously-synthetic output; `src/strategies/ai/index.ts`'s
+  `getAIService()` factory is the only place that knows the `mock` name
+  (`AI_PROVIDER` env var) — same pattern as `OtpProvider`/`PaymentGateway`.
+  **Only `generateQuestions` is wired to an endpoint this phase** — the
+  other four complete the documented interface for a future phase to use.
+- **`POST /admin/ai/jobs`** (`src/services/aiService.ts`): validates
+  subject/topic, creates an `ai_generation_jobs` row, calls
+  `AIService.generateQuestions()` **synchronously** (the mock provider has
+  no real latency to hide behind a queue), creates one
+  `ai_generation_items` row per candidate (status `PENDING_REVIEW`), flags
+  `duplicateMatchQuestionId` via a simple exact-normalized-text match
+  against already-APPROVED questions in the same subject, and marks the
+  job `COMPLETED` — or `FAILED` with `errorCode AI_GENERATION_FAILED` (502)
+  if the provider itself throws.
+- **`GET /admin/ai/jobs?status=&subjectId=`, `GET /admin/ai/jobs/:jobId`**
+  (job + items).
+- **`POST /admin/ai/jobs/:jobId/items/:itemId/approve`**: creates a real
+  question through the *exact same* `questionService.createQuestion()`
+  transaction every manually-authored question uses (no parallel "AI
+  question" path — ADR-033), then immediately calls
+  `questionService.approveQuestion()` — the admin's approval of this item
+  *is* the mandatory human review ADR-011 requires, so there's no separate
+  second approval step. Stamps the new question with AI provenance
+  (`sourceType='AI_GENERATED'`, `generatedByAi=true`, `aiProvider`,
+  `aiModel`, `generationJobId`, `generationPromptVersion`, `generatedAt` —
+  `questions` columns that existed since Phase 2 but went unused until
+  now) via a new `aiMetadata` parameter on `createQuestion()` that is
+  **not** part of the public `createQuestionSchema`, so no
+  `POST /admin/questions` request can forge AI provenance (ADR-033).
+  Audited as `question.approve` (reused, not a new `ai.*` audit action).
+- **`POST /admin/ai/jobs/:jobId/items/:itemId/reject`** `{ reason? }`:
+  marks the item `REJECTED`, records the reason, creates no question. Not
+  separately audited (nothing was created/changed that spec section 46's
+  audit list calls out).
+- **Idempotency guard**: approving or rejecting an item not in
+  `PENDING_REVIEW` returns `VALIDATION_ERROR` (409) rather than silently
+  re-processing or double-counting `job.approvedCount`/`failedCount`.
+- **New permission activated**: `ai.generate` (already seeded in Phase 1's
+  baseline, unused until now — same "dormant code" pattern as
+  `question.*`/`test.*`/`product.*` before it). Unlike every other admin
+  module, one single permission gates the entire `/admin/ai/*` surface —
+  no `.view`/`.approve` split, since the module's scope doesn't warrant the
+  extra ceremony.
+- **No new error codes or migrations needed** — `AI_JOB_NOT_FOUND`,
+  `AI_GENERATION_FAILED`, and the `ai_generation_jobs`/`ai_generation_items`
+  tables were all already seeded/defined since Phase 1/2 and unused until
+  now.
+- Added `NonAttribute` association declarations needed for the new nested
+  includes: `AiGenerationJob.items`, `QuestionVersion.question`,
+  `QuestionTranslation.questionVersion` (used by the duplicate-detection
+  query, which joins translation → version → question).
 
 ### Testing
 
-- **10 new integration tests** (`tests/integration/payment.test.ts`):
-  payment creation + idempotent retry, cross-student ownership rejection on
-  both create and simulate, invalid-signature webhook rejection (state
-  unchanged), valid-signature-wrong-amount webhook rejection (state
-  unchanged), the full simulate-PAID flow (order/payment/entitlement/audit-
-  log all asserted), `ORDER_ALREADY_PAID` on a second payment attempt,
-  webhook-event replay dedup (exactly one `payment_webhook_events` row
-  asserted), and a FAILED outcome leaving the order `PENDING`.
-- Manually verified end-to-end against a live server/database first
-  (including hand-crafting a validly-HMAC-signed-but-tampered payload via a
-  one-off Node script to prove amount verification actually runs, not just
-  signature checking) — same discipline as every prior phase.
+- **6 new integration tests** (`tests/integration/ai.test.ts`): student
+  blocked from every AI route, job creation generating the requested item
+  count, full approve flow (question created + published + AI-provenance
+  fields asserted + job.approvedCount + audit log), reject flow (reason
+  recorded, no question created, job.failedCount), re-approving an
+  already-decided item rejected (409), and `findDuplicateQuestion` called
+  directly (unit-style, mirroring how `computeRankings` was tested in
+  Phase 8) asserting both a positive match (normalized case/whitespace-
+  insensitive) and a negative one.
+- Manually verified end-to-end against a live server/database first: job
+  creation, approve (question published, AI metadata fields confirmed via
+  `GET /admin/questions/:id`), reject, re-approve-rejected (409), and
+  student `FORBIDDEN` from `/admin/ai/*` — same discipline as every prior
+  phase.
 
 ## In Progress
 
-Nothing — Phase 10 scope is complete.
+Nothing — Phase 11 scope is complete.
 
 ## Blocked
 
@@ -118,25 +116,22 @@ None.
 
 ## Known Issues
 
-Updated this phase (see `docs/KNOWN_ISSUES.md`): added "no real
-PaymentGateway implementation," "mock gateway signs parsed body not raw
-bytes" (with a warning not to copy that shortcut into a real provider), and
-"no student-facing GET /entitlements view."
+Updated this phase (see `docs/KNOWN_ISSUES.md`): added "AI generation runs
+synchronously, no job queue," "only generateQuestions is wired to an
+endpoint," "duplicate detection is exact-text-match only, scoped to one
+subject," and "no bulk approve/reject."
 
 ## Next Recommended Task
 
-Phase 11: AI. Per spec sections 20/37: an `AIService` interface (ADR-006,
-same pattern as `OtpProvider`/`PaymentGateway`) with a mock implementation,
-an admin-triggered "generate questions" job
-(`ai_generation_jobs`/`ai_generated_questions` tables from Phase 2 —
-confirm their exact shape in `docs/DATABASE.md` before designing the
-service layer), and an admin review step where generated questions must be
-explicitly approved before they enter the normal question-bank workflow
-(reuse `questionService.ts`'s existing approve/reject/version machinery
-rather than inventing a parallel one — same "extend, don't duplicate"
-discipline used for commerce). `AI_JOB_NOT_FOUND`/`AI_GENERATION_FAILED`
-error codes and `ai.generate` permission are already seeded/defined and
-unused, per the established pattern.
+Phase 12: Student Frontend. The backend's full student-facing surface now
+exists: auth (OTP), catalog/test browsing, product browsing, order
+creation, payment (mock) + entitlement, attempt lifecycle (create/answer/
+submit/result), all documented in `docs/API.md`. Build the React/Vite
+frontend's student-facing screens against this real API — no backend
+placeholder/mock data layer should be needed. Confirm `docs/FRONTEND.md`'s
+Phase-1-era plan still matches the as-built API shapes before writing
+components; update it where the two have diverged (e.g. exact response
+envelopes, error codes actually returned).
 
 ## Last Updated
 
@@ -144,47 +139,52 @@ unused, per the established pattern.
 
 ## Last Development Session
 
-Implemented and verified Phase 10 (Payments): a `PaymentGateway` interface
-(ADR-006) with a `MockPaymentGateway` that signs/verifies real HMAC webhook
-payloads rather than bypassing verification, `POST /payments/create` and
-the webhook-driven `processWebhook()` that is the *only* place an order
-becomes `PAID` and entitlements get created from a purchase — signature
-verification, event-replay dedup, and order-total re-verification all run
-unconditionally before any mutation. `POST /payments/:paymentId/simulate`
-(mock-only) routes through that exact same function rather than a parallel
-shortcut (ADR-032), so the acceptance-criteria "purchase using mock payment
-→ entitlement created" flow is exercised identically to how a real
-provider integration would be. Verified end-to-end manually (including a
-hand-signed tampered-amount payload proving the amount check isn't
-decorative) and via 10 new integration tests (64 total, all passing).
+Implemented and verified Phase 11 (AI): an `AIService` interface (ADR-006)
+with a `MockAIProvider`, a synchronous admin-triggered generation-job
+workflow (`ai_generation_jobs`/`ai_generation_items`, tables that existed
+since Phase 2 but were unused), and a review step where approving a
+generated item routes through the exact same `questionService.
+createQuestion()`/`approveQuestion()` path a manually-authored question
+uses (ADR-033) — no parallel "AI question" table or endpoint family, and
+AI provenance is passed through an internal-only parameter that no client
+request can forge. A simple exact-text duplicate-detection check flags
+likely-repeat generations without adding a new dependency. Verified
+end-to-end manually (job → approve → published question with AI metadata
+→ confirmed absent from any student-facing attempt payload) and via 6 new
+integration tests (70 total, all passing).
 
 ## Important Files Changed
 
-- `src/strategies/payment/{PaymentGateway.ts,MockPaymentGateway.ts,index.ts}` (created)
-- `src/repositories/paymentRepository.ts` (created)
-- `src/repositories/orderRepository.ts` (extended — `updateOrder`)
-- `src/services/paymentService.ts` (created)
-- `src/services/entitlementService.ts` (extended — `createEntitlementsForPaidOrder`)
-- `src/validations/payment.validation.ts` (created)
-- `src/controllers/paymentController.ts` (created)
-- `src/api/v1/routes/payment.routes.ts` (created)
-- `src/app.ts` (modified — mounts `paymentRouter`)
-- `tests/integration/payment.test.ts` (created)
-- `docs/API.md`, `docs/COMMERCE_AND_PAYMENTS.md`, `docs/SECURITY.md`,
-  `docs/DECISIONS.md` (ADR-032), `docs/KNOWN_ISSUES.md`, `docs/CHANGELOG.md`
+- `src/strategies/ai/{AIService.ts,MockAIProvider.ts,index.ts}` (created)
+- `src/repositories/aiRepository.ts` (created)
+- `src/services/aiService.ts` (created)
+- `src/services/questionService.ts` (modified — `createQuestion()` gained
+  an optional `aiMetadata` parameter, `AiSourceMetadata` interface)
+- `src/validations/ai.validation.ts` (created)
+- `src/controllers/aiController.ts` (created)
+- `src/api/v1/routes/ai.routes.ts` (created)
+- `src/app.ts` (modified — mounts `aiRouter`)
+- `src/models/{AiGenerationJob.ts,QuestionVersion.ts,QuestionTranslation.ts}`
+  (modified — `NonAttribute` association declarations)
+- `tests/integration/ai.test.ts` (created)
+- `docs/AI.md` (rewritten for the as-built workflow), `docs/API.md`,
+  `docs/AUTHENTICATION.md`, `docs/SECURITY.md`, `docs/DECISIONS.md`
+  (ADR-033), `docs/KNOWN_ISSUES.md`, `docs/CHANGELOG.md`
 
 ## Database Changes
 
-None — Phase 10 used the existing `payments`/`payment_webhook_events`
-tables from Phase 2 as-is (both had gone unused since their migrations ran
-in Phase 2). No new migrations, no new seeders.
+None — Phase 11 used the existing `ai_generation_jobs`/`ai_generation_items`
+tables and the `questions` table's AI-provenance columns, all from Phase 2,
+as-is. No new migrations, no new seeders (`ai.generate` was already seeded
+in Phase 1's baseline).
 
 ## API Changes
 
 Added (see `docs/API.md` for full request/response shapes):
-- `POST /payments/create`
-- `POST /payments/webhook` (no session auth)
-- `POST /payments/:paymentId/simulate` (mock-only)
+- `GET /admin/ai/jobs`, `GET /admin/ai/jobs/:jobId`
+- `POST /admin/ai/jobs`
+- `POST /admin/ai/jobs/:jobId/items/:itemId/approve`
+- `POST /admin/ai/jobs/:jobId/items/:itemId/reject`
 
 ## Testing Status
 
@@ -197,32 +197,26 @@ Added (see `docs/API.md` for full request/response shapes):
 - `tests/integration/attempt.test.ts` — 5 tests (Phase 7).
 - `tests/integration/results.test.ts` — 6 tests (Phase 8).
 - `tests/integration/commerce.test.ts` — 14 tests (Phase 9).
-- `tests/integration/payment.test.ts` — 10 tests (this phase).
-- Total: 64 tests, all passing against the real test database.
-- Still open: same items as Phase 9 (`product_items` CHECK constraint not
-  tested against the raw model; a few Security Test Coverage checklist
-  items remain implied-but-not-separately-asserted — see
-  `docs/KNOWN_ISSUES.md`).
+- `tests/integration/payment.test.ts` — 10 tests (Phase 10).
+- `tests/integration/ai.test.ts` — 6 tests (this phase).
+- Total: 70 tests, all passing against the real test database.
+- Still open: same items as Phase 9/10 (see `docs/KNOWN_ISSUES.md`), plus
+  the new AI-specific gaps noted above.
 
 ## Handover Notes
 
-- **`processWebhook()` is the only place that may set `orders.status =
-  'PAID'` or call `createEntitlementsForPaidOrder()`.** Never add a
-  shortcut that marks an order paid from a client-facing request handler —
-  see ADR-032 and `docs/SECURITY.md`'s Payment Security section for why,
-  and the exact case (Phase 7's `createAttempt` leak) this project already
-  learned this lesson from once.
-- **The mock gateway's HMAC covers the parsed JSON body, not raw request
-  bytes.** This is fine for a mock provider but is explicitly *not* a
-  template for a real provider integration — a real gateway must verify
-  over raw bytes per that provider's documented scheme. See
-  `docs/KNOWN_ISSUES.md`.
-- **`createEntitlementsForPaidOrder()` is idempotent per `product_item`,
-  not per webhook event** — it's safe to call it twice for the same order
-  (e.g. from a retried simulate call with a fresh `eventId`) because it
-  checks for an existing active entitlement per item before creating one,
-  independent of the webhook-event-level dedup that already runs earlier
-  in `processWebhook()`. Both layers of idempotency are intentional and
-  both are tested.
+- **Never add `sourceType`/`generatedByAi`/`aiProvider`/etc. as
+  client-settable fields on `createQuestionSchema`.** They exist on
+  `createQuestion()`'s internal `aiMetadata` parameter specifically so no
+  request body can forge AI provenance — see ADR-033.
+- **`aiService.approveItem()` is the only place that should ever call
+  `questionService.createQuestion()` with `aiMetadata` set.** Any future
+  AI-adjacent feature (e.g. bulk import) needing its own provenance should
+  extend `AiSourceMetadata`'s shape, not bypass this rule.
+- **AI generation is currently synchronous** — if a real (non-mock)
+  `AIService` is ever wired up and its calls are slow, `createGenerationJob()`
+  will need to change from awaiting the provider inline to a real background
+  job using the `ai_generation_jobs.status = 'PROCESSING'` state that
+  already exists but is currently only ever observed transiently.
 - Read `CLAUDE.md` and this file first in any new session before writing
   code.

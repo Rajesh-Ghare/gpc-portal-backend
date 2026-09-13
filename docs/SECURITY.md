@@ -29,6 +29,14 @@ Serializers/DTOs for in-progress-attempt question payloads must explicitly
 whitelist safe fields rather than passing a full Sequelize model instance to
 `res.json()`.
 
+**Implemented and verified (Phase 11)**: these AI columns exist on
+`questions` (populated by `aiService.approveItem()` for AI-sourced
+questions — see `docs/AI.md`) but `attemptRepository.ts`/
+`attemptService.ts`'s serializers only ever read through `QuestionVersion`/
+translations/options, never the `Question` row's own columns directly, so
+there is no code path that could leak them to a student regardless of a
+question's origin.
+
 **Admin views are an intentional, separate exception** (Phase 8, ADR-030):
 `GET /admin/attempts/:id` and `GET /admin/results/:id` (`attempt.view`/
 `result.view` permission, not `attemptPolicy`) do return `is_correct`/full
@@ -129,6 +137,13 @@ own?").
 - [x] **A student cannot create or simulate a payment for another
       student's order** — verified, same file
       (`orderPolicy.ensureOwnsOrder`, `errorCode FORBIDDEN`).
+- [x] **A student cannot call any AI admin route** — verified,
+      `tests/integration/ai.test.ts` (`errorCode FORBIDDEN` from
+      `requirePermission('ai.generate')`).
+- [x] **AI-generated content cannot become a usable question without an
+      explicit human approval** — verified: a `PENDING_REVIEW` item creates
+      no `questions` row until `POST .../approve` is called; a rejected
+      item never creates one at all (`tests/integration/ai.test.ts`).
 
 Unchecked items above are implied-but-not-separately-asserted — add
 explicit tests for them as the relevant phase makes them concrete.
@@ -141,7 +156,7 @@ changes, result release, role/permission changes, and any administrative
 override. Each entry records actor, action, entity, before/after data, IP,
 user agent, and a timestamp.
 
-**Implemented (Phases 5–10)**: `src/services/auditLogService.ts` — currently
+**Implemented (Phases 5–11)**: `src/services/auditLogService.ts` — currently
 called from `question.approve`, `question.reject`,
 `question.version_created` (`src/services/questionService.ts`),
 `test.publish`, `test.close` (`src/services/testService.ts`),
@@ -154,7 +169,13 @@ is written for both an admin's manual grant (`actorId` = the admin's user
 id) and a purchase-triggered grant from `processWebhook()`
 (`actorId: null`, `metadata.source: 'PURCHASE'`) — "entitlement changes" in
 the spec's list isn't qualified as admin-only, so both paths are audited
-the same way. Metadata-only question edits, test archive, plain product/
+the same way. `aiService.approveItem()` (Phase 11) calls
+`questionService.approveQuestion()` directly, so an AI-sourced question's
+approval writes the exact same `question.approve` entry a manually-authored
+question's approval would — no separate `ai.item_approved` action exists,
+since reviewing the AI item *is* the question approval. Rejecting an AI
+item is deliberately **not** audited (nothing was created or changed that
+needs a trail — spec section 46's list has no "AI item rejected" action). Metadata-only question edits, test archive, plain product/
 product-item CRUD, and every catalog/subject/topic/section/question-
 assignment/rule/order/attempt-viewing/payment-creation CRUD or read action
 is deliberately **not** audited — they aren't in the spec's list. Follow

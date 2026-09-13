@@ -1,4 +1,13 @@
-import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, Sequelize } from 'sequelize';
+import {
+  CreationOptional,
+  DataTypes,
+  InferAttributes,
+  InferCreationAttributes,
+  Model,
+  NonAttribute,
+  Sequelize,
+} from 'sequelize';
+import type { AiGenerationItem } from './AiGenerationItem';
 
 export class AiGenerationJob extends Model<InferAttributes<AiGenerationJob>, InferCreationAttributes<AiGenerationJob>> {
   declare id: CreationOptional<string>;
@@ -23,6 +32,8 @@ export class AiGenerationJob extends Model<InferAttributes<AiGenerationJob>, Inf
   declare configuration: CreationOptional<Record<string, unknown>>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
+
+  declare items?: NonAttribute<AiGenerationItem[]>;
 
   static associate(models: {
     User: typeof import('./User').User;

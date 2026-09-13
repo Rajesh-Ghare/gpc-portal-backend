@@ -99,6 +99,28 @@
   `display_order`. Low priority (a presentation concern, not a correctness
   one); implement alongside the student frontend if per-attempt option
   shuffling turns out to matter for anti-cheating.
+- **AI question generation runs synchronously within the request** (no job
+  queue) — fine for the mock provider (no real latency) but a real provider
+  integration (an actual LLM API call for `requestedCount` questions) could
+  make `POST /admin/ai/jobs` slow or timeout-prone. Revisit with a real
+  background job (and the `PROCESSING` status `ai_generation_jobs` already
+  has, currently only ever seen transiently) once a real `AIService` is
+  wired up.
+- **Only `generateQuestions` is wired to an endpoint.**
+  `translateQuestion`/`generateExplanation`/`validateQuestion`/
+  `classifyDifficulty` are implemented on `MockAIProvider` (interface
+  completeness) but nothing calls them yet — add endpoints when a real use
+  case needs them (e.g. a "translate this question to Hindi" admin action).
+- **AI duplicate detection is an exact-normalized-text match only**, scoped
+  to already-APPROVED questions in the same subject — it won't catch a
+  near-duplicate that's reworded differently. `docs/AI.md` documents this
+  as a deliberate V1 simplification; upgrading to a real similarity
+  strategy (embeddings, fuzzy matching) would need a new dependency (e.g. a
+  vector store) and should get its own ADR when actually built, not before.
+- **No admin AI endpoint deletes/cancels a job or bulk-approves/rejects
+  items.** Each item is reviewed one at a time via its own approve/reject
+  call. Fine at V1 scale; add bulk actions if reviewing many generated
+  items one-by-one becomes a real workflow complaint.
 - **Security test coverage has some unchecked boxes** — see
   `docs/SECURITY.md`'s "Required Security Test Coverage" list. Remaining
   items are implied-but-not-separately-asserted (e.g. "student cannot
