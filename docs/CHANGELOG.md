@@ -204,6 +204,13 @@
   by adding `{ association: 'user' }` to both repositories' queries and
   the missing `NonAttribute<User>` declarations on the `Order`/
   `Entitlement` models.
+- `GET /admin/results/:id` never joined `user` either (same class of gap as
+  orders/entitlements above) — its admin frontend page rendered a blank
+  student name. Fixed with a dedicated `findResultByIdForAdmin()`
+  repository function rather than widening the shared `findResultById()`
+  the student-facing `getResult()` also uses, per ADR-030's "admin views
+  are separate functions" discipline. Found via real-browser end-to-end
+  verification of the admin results page, not by typechecking.
 
 ### Security
 

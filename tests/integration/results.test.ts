@@ -190,6 +190,20 @@ describe('Results (rank/percentile + release workflow)', () => {
     expect(auditLog).not.toBeNull();
   });
 
+  it('admin result detail joins the student (mobileNumber), unlike the shared student-facing lookup', async () => {
+    const listRes = await request(app)
+      .get(`/api/v1/admin/tests/${testId}/results`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    const resultId = listRes.body.data[0].id as string;
+
+    const detailRes = await request(app)
+      .get(`/api/v1/admin/results/${resultId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    expect(detailRes.body.data.result.user?.mobileNumber).toBeTypeOf('string');
+  });
+
   it('now allows the student to view their released result', async () => {
     const res = await request(app)
       .get(`/api/v1/attempts/${attemptIds[0]}/result`)

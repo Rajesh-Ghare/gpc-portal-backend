@@ -20,7 +20,10 @@ export async function listResultsForTest(testId: string) {
 }
 
 export async function getResultDetailForAdmin(id: string) {
-  const result = await getResultOrThrow(id);
+  const result = await resultRepo.findResultByIdForAdmin(id);
+  if (!result) {
+    throw new AppError(ErrorCode.RESULT_NOT_FOUND, 'Result not found', 404);
+  }
   const details = await resultRepo.findResultDetails(id);
   return { result, details };
 }

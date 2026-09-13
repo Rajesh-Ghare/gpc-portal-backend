@@ -464,7 +464,11 @@ GET  /admin/tests/:testId/results             requires result.view
                                                  ordered by scoredMarks desc, with user joined
 GET  /admin/results/:id                       requires result.view
                                                → { result, details: result_details[] } — full
-                                                 detail regardless of the test's show_* flags
+                                                 detail regardless of the test's show_* flags;
+                                                 `result.user` joined (added Phase 13, via a
+                                                 separate admin-only repository query — see
+                                                 ADR-030 — rather than widening the query the
+                                                 student-facing getResult() also uses)
                                                errorCode RESULT_NOT_FOUND
 
 POST /admin/tests/:testId/results/release     requires result.release
