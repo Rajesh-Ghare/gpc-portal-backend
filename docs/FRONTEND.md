@@ -37,6 +37,46 @@ browsing" flow — enforced by src/app/ProtectedRoute.tsx)
 /profile                       current user info + logout
 ```
 
+## Routes — Implemented (Phase 13, Admin)
+
+All under `AdminGuard` (requires the `ADMIN` or `SUPER_ADMIN` role — see
+Permissions section below) plus `AdminLayout` (a sidebar, distinct from the
+student `AppLayout`):
+
+```
+/admin                          dashboard — tiles link to each section,
+                                 each tile hidden unless the user has that
+                                 section's permission
+/admin/catalog                  categories/exams/series (tabbed, one page)
+/admin/subjects                 subjects + topics (one page, two sections)
+/admin/questions                question list (filter by subject/review status)
+/admin/questions/new            author a new MCQ_SINGLE question
+/admin/questions/:questionId    question detail — content, approve/reject
+/admin/ai                       AI generation job list + "generate" form
+/admin/ai/:jobId                job detail — generated items, approve/reject
+/admin/tests                    test list
+/admin/tests/new                minimal test-creation form
+/admin/tests/:testId            the test builder — sections/questions/rules
+                                 tabs, validate/publish/close/archive actions
+/admin/tests/:testId/results    per-test results + release action
+/admin/results/:resultId        one student's full result + answer breakdown
+/admin/products                 product list + inline create
+/admin/products/:productId      product detail — prices/items CRUD
+/admin/orders                   all orders (read-only)
+/admin/orders/:orderId          order detail (read-only)
+/admin/entitlements             entitlement list + grant form (student
+                                 search + test picker) + revoke action
+/admin/attempts                 all attempts (read-only)
+/admin/attempts/:attemptId      full attempt detail, INCLUDING correctness
+                                 (admin-only view — see ADR-030)
+```
+
+Login redirects an `ADMIN`/`SUPER_ADMIN` user straight to `/admin` instead
+of `/tests` (see `VerifyOtpPage.tsx`) — the role check runs after
+`GET /auth/me` resolves inside `useVerifyOtp`'s `onSuccess`, so the
+redirect decision always has the full profile, not the partial one
+`verify-otp` itself returns.
+
 ### Deviations From the Original (Phase 1) Plan
 
 - **No separate `/test/:testId/instructions` route.** The originally-planned
@@ -96,16 +136,26 @@ Per-type status:
   real usage shows the navigator needs to be collapsible on very small
   screens.
 
-## Permissions on the Frontend
+## Permissions on the Frontend — Implemented (Phase 13)
 
-`src/permissions/` is not yet populated — nothing in the Phase 12
-student-facing surface is permission-gated (every student route needs only
-a valid session, never a permission code; see `docs/AUTHENTICATION.md`).
-This directory will matter starting Phase 13 (Admin Frontend), where
-`requirePermission`-gated backend routes need corresponding UI-level
-show/hide logic — still only a UX convenience, per `docs/SECURITY.md`;
-every action stays re-checked server-side regardless of what the frontend
-shows.
+`src/permissions/index.ts`: `usePermission(code)` (a hook reading
+`authStore`'s `user.permissions`) and `hasPermission(code)` (a non-hook
+variant for use outside components), plus `useIsAdmin()`. This only works
+because `GET /auth/me` was extended in this phase to actually return a
+`permissions: string[]` field — see this repo's own `docs/AUTHENTICATION.md`
+and `docs/CHANGELOG.md` for that backend addition, made specifically to
+unblock this.
+
+Used throughout the admin UI: `AdminLayout`'s sidebar hides a section's
+link unless the user has that section's `.view` permission;
+`AdminDashboardPage`'s tiles do the same; action buttons (approve/reject a
+question, publish/close a test, release results) check the specific
+permission before rendering. **Still UX-only, per `docs/SECURITY.md`** —
+every one of these actions is independently re-checked server-side via
+`requirePermission`; the frontend check only avoids showing a button that
+would 403 anyway. `AdminGuard` (the route-level gate) checks the coarser
+`ADMIN`/`SUPER_ADMIN` *role*, not a specific permission — a logged-in
+`STUDENT` is redirected to `/tests` before any admin page even mounts.
 
 ## API Client — Implemented (Phase 12)
 
@@ -142,3 +192,31 @@ been touched (an unguarded optional-chain comparison,
 itself is `null`) — extracted into a single `isQuestionAnswered()` helper
 (`src/features/attempt/utils.ts`) shared by `AttemptPage` and
 `QuestionNavigator` so the two can't diverge again.
+
+## Manual/Automated Verification (Phase 13)
+
+Same method as Phase 12 (`tsc -b`, `oxlint`, `vite build`, plus a
+real-browser CDP walkthrough — see above). Coverage this phase, with real
+DOM events and a live backend: admin login redirecting to `/admin`;
+catalog category creation; subject creation; authoring and approving a
+question end-to-end (published and immediately usable); the full test
+builder — create test, add a section, assign an approved question,
+validate, publish (`status` confirmed `PUBLISHED` via a follow-up API
+call too); entitlement grant via the new student-search picker, then
+revoke; an AI generation job created and one item approved into a real
+published question; releasing results and opening a result's detail;
+product creation and adding a price; browsing orders and confirming the
+student's identity is shown; browsing attempts and confirming the
+admin-only correctness view actually renders `is_correct`/selected-option
+data. **Found and fixed one real backend bug along the way** (not a
+frontend one this time): the admin result-detail page rendered a blank
+student name because the shared `getResultOrThrow()`/`findResultById()`
+never joined `user` — see this repo's own `docs/CHANGELOG.md` for the fix
+(a separate `findResultByIdForAdmin()`, per ADR-030's "admin views are
+separate functions" rule). Three other small backend gaps were found and
+fixed *before* frontend work started once they were identified as
+blockers (not via the browser pass): `GET /auth/me` missing
+`permissions`, `GET /admin/orders`/`GET /admin/entitlements` missing a
+`user` join, and no way at all to search for a student
+(`GET /admin/students` added) — all documented in this repo's own
+`docs/CHANGELOG.md` and `docs/AUTHENTICATION.md`/`docs/API.md`.

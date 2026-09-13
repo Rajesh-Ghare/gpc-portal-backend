@@ -158,6 +158,22 @@
   fullName, STUDENT role only, capped at 20 results) built specifically to
   unblock the admin entitlement-grant UI, which previously had no way to
   find a `userId` at all.
+- Admin Frontend (Phase 13, code in the companion `gpc-portal-frontend`
+  repo): the complete admin surface against the real API — catalog,
+  subjects/topics, question authoring + approval, AI generation + review,
+  the full test builder (sections/questions/rules/publish/close/archive),
+  results release, product/price/item management, read-only order and
+  attempt browsing (the latter showing correctness data per ADR-030's
+  admin-only exception), and entitlement grant (via the new student
+  search)/revoke. A role-gated `AdminGuard` + permission-gated
+  `AdminLayout` sidebar, backed by a new `permissions` field on
+  `GET /auth/me` and `src/permissions/` helpers — still UX-only, every
+  action re-checked server-side. See `docs/FRONTEND.md` for the as-built
+  structure and `docs/DEVELOPMENT_STATUS.md` for this phase's full notes,
+  including four small backend gaps found and fixed while building it
+  (permissions on `/auth/me`, `user` joins on admin orders/entitlements/
+  results, and the new student-search endpoint above) and one more caught
+  by the real-browser verification pass itself (the results `user` join).
 
 ### Changed
 
