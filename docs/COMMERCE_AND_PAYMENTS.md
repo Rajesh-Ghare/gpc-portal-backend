@@ -84,10 +84,22 @@ entitlements
 Attempt-start (`EXAM_ENGINE.md`) checks entitlement status, validity window, and
 `attempts_used < attempt_limit` (or unlimited if `attempt_limit IS NULL`).
 `attempts_used` increments transactionally alongside attempt creation, not as a
-separate best-effort update.
+separate best-effort update. **Implemented and verified (Phase 7)**:
+`findActiveEntitlementForTest()` (`src/services/entitlementService.ts`)
+resolves `INDIVIDUAL_TEST`/`EXAM_PACKAGE`/`TEST_SERIES`/blanket
+`SUBSCRIPTION`/`ALL_ACCESS` matches (not `SUBJECT_PACKAGE` — see
+`docs/DECISIONS.md` ADR-026).
 
-## Admin Overrides
+## Admin Overrides — Implemented (Phase 7)
 
-An admin may grant an entitlement manually (e.g. comped access) — this must go
-through the same `entitlements` table and must be audit-logged
-(`granted_by` = admin user id, plus an `audit_logs` entry).
+`POST /admin/entitlements` (`entitlement.grant` permission) lets an admin
+grant an entitlement manually (e.g. comped access, or — until Order/Payment
+flows exist in Phase 9/10 — the *only* way to grant one at all). Goes
+through the real `entitlements` table, is idempotent (returns the existing
+active entitlement rather than duplicating), sets `granted_by` to the
+admin's user id, and writes an `audit_logs` entry
+(action `entitlement.grant`). Given a `testId`, it finds-or-creates the
+minimal `INDIVIDUAL_TEST` product/product_item needed — see ADR-025 for the
+full reasoning on why this exists ahead of full Commerce, and
+`docs/API.md` for the request/response shape. No revoke or list/browse
+endpoint exists yet (`docs/KNOWN_ISSUES.md`).

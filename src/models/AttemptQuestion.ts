@@ -1,4 +1,15 @@
-import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, Sequelize } from 'sequelize';
+import {
+  CreationOptional,
+  DataTypes,
+  InferAttributes,
+  InferCreationAttributes,
+  Model,
+  NonAttribute,
+  Sequelize,
+} from 'sequelize';
+import type { Question } from './Question';
+import type { QuestionVersion } from './QuestionVersion';
+import type { AttemptAnswer } from './AttemptAnswer';
 
 export class AttemptQuestion extends Model<InferAttributes<AttemptQuestion>, InferCreationAttributes<AttemptQuestion>> {
   declare id: CreationOptional<string>;
@@ -14,6 +25,10 @@ export class AttemptQuestion extends Model<InferAttributes<AttemptQuestion>, Inf
   declare markedForReview: CreationOptional<boolean>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
+
+  declare question?: NonAttribute<Question>;
+  declare questionVersion?: NonAttribute<QuestionVersion>;
+  declare answer?: NonAttribute<AttemptAnswer | null>;
 
   static associate(models: {
     Attempt: typeof import('./Attempt').Attempt;

@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-Phase 6 - Test Builder (complete, verified against real PostgreSQL + automated tests)
+Phase 7 - Exam Engine / Attempt Lifecycle (complete, verified against real PostgreSQL + automated tests)
 
 ## Overall Progress
 
@@ -12,7 +12,7 @@ Phase 6 - Test Builder (complete, verified against real PostgreSQL + automated t
 - [x] Exam catalog
 - [x] Question bank
 - [x] Test builder
-- [ ] Exam engine
+- [x] Exam engine
 - [ ] Results
 - [ ] Commerce
 - [ ] Payments
@@ -22,86 +22,135 @@ Phase 6 - Test Builder (complete, verified against real PostgreSQL + automated t
 - [ ] Testing
 - [ ] Deployment
 
-("Test builder" = assembling a test's structure and lifecycle
-(create/sections/manual-questions/rules/validate/publish/close/archive).
-"Exam engine" (next) = actually *running* an attempt against that
-structure — resolving `RULE_BASED` rules into a frozen question set,
-timing, autosave, submission. `validateTest()` already checks a rule's
-satisfiability; it does not select/freeze questions — that's Phase 7.)
+("Exam engine" = attempt creation, selection, timer, autosave, submission,
+evaluation, and per-attempt result retrieval. "Results" (next) = cross-
+attempt aggregation — rank/percentile — and the admin result-release
+workflow implied by `results.released_at`; see ADR-027.)
 
 ## Current Work
 
-Phase 6 is complete and verified. Awaiting user confirmation before starting
-Phase 7 (Exam Engine / Attempt lifecycle: attempt creation with
-manual/rule-based question selection and snapshotting, answer autosave,
-backend-authoritative timer, transactional idempotent submission,
-evaluation).
+Phase 7 is complete and verified — including a minimal admin
+entitlement-grant feature the project owner explicitly requested ahead of
+Commerce, built as a real (not throwaway) slice of the commerce data model.
+Awaiting user confirmation before starting Phase 8 (Results: rank/
+percentile computation, admin result-release workflow, admin result
+browsing).
 
-## Completed (Phase 6, this session)
+## Completed (Phase 7, this session)
 
-- **Full test CRUD** (`src/services/testService.ts`): create/get/list/
-  update/delete for `tests`, validating `competitiveExamId`/`testSeriesId`
-  exist, with slug auto-generation/uniqueness (same pattern as catalog).
-- **Test lifecycle**: `DRAFT → PUBLISHED → CLOSED → ARCHIVED`
-  (`publishTest`/`closeTest`/`archiveTest`), each enforcing the correct
-  *from* status (`TEST_INVALID_STATUS_TRANSITION` otherwise, 409).
-- **`ensureTestEditable()`**: a test's sections/manual questions/rules/basic
-  info can only be created/updated/deleted while `status=DRAFT`
-  (`TEST_NOT_EDITABLE`, 409) — ADR-024. No live attempts exist yet to
-  protect, but this closes the gap before Phase 7 needs it.
-- **Test validation engine** (`validateTest()`): for `MANUAL` tests, checks
-  at least one `test_questions` row exists; for `RULE_BASED` tests, checks
-  at least one `test_rules` row exists **and** that each rule's filter
-  (subject/topic/type/difficulty/tags) actually has enough
-  `PUBLISHED`+`APPROVED` questions to satisfy `question_count`
-  (`questionRepository.countApprovedQuestions()`, tag-filtered "any of").
-  Also computes `totalQuestions`/`totalMarks` from the real assembled
-  content. `GET /admin/tests/:id/validate` exposes this without mutating
-  anything; `publishTest()` calls it and **persists** the computed totals on
-  success (ADR-024) rather than trusting an admin-entered value.
-- **Test sections CRUD**, hard-deleted (matches the schema — `test_sections`
-  has no `deleted_at`).
-- **Manual test-question assignment** (`test_questions`): the first real use
-  of the `QUESTION_NOT_APPROVED` error code (defined since Phase 1, unused
-  until now) — adding a question whose `reviewStatus !== 'APPROVED'` is
-  rejected. `questionVersionId` defaults to the question's latest version;
-  `marks`/`negativeMarks` default to that version's own values, falling back
-  further to the test's `defaultMarksPerQuestion`/`defaultNegativeMarks`.
-  Duplicate question-in-test is rejected before hitting the DB's unique
-  constraint, for a cleaner error.
-- **Test rules CRUD** (`test_rules` + `test_rule_tags`), including inline
-  tag find-or-create (same pattern as question tags — ADR-022).
-- **`audit_logs` extended to `test.publish`/`test.close`**
-  (`test.archive` deliberately excluded — not on spec section 46's list;
-  see ADR-024) — the fifth and sixth audit-logged action types overall.
-- Added `setTags`/`tags` mixin types to `TestRule` (same pattern as
-  `Question` in Phase 5) and `sections`/`testQuestions`/`testRules`
-  `NonAttribute` declarations to `Test` (needed for `validateTest()` to read
-  eager-loaded associations with type safety instead of `.get()`).
-- 2 new error codes: `TEST_NOT_EDITABLE`, `TEST_INVALID_STATUS_TRANSITION`.
-- No new permission seeder needed — `test.view`/`create`/`update`/
-  `validate`/`publish`/`close` were already seeded in Phase 1's baseline
-  list and simply went unused until this phase wired them to real routes
-  (same story as `question.*` in Phase 5).
-- **Verified manually against a real running server + PostgreSQL 17**: full
-  create → validate-fails-empty → publish-fails-validation → add section +
-  approved question → validate-passes → publish (totals computed) →
-  edit-blocked-while-published → close → archive flow; confirmed
-  `QUESTION_NOT_APPROVED` rejection for an unapproved question; confirmed a
-  `RULE_BASED` test's validation correctly detects an unsatisfiable rule
-  (100 requested, 4 available) and passes once the count is lowered to what
-  the real approved-question pool can supply.
+### Attempt engine
+
+- **`POST /tests/:testId/attempts`**: validates test is `PUBLISHED` and
+  within its availability window, resolves an active entitlement
+  (`entitlementService.findActiveEntitlementForTest` — `INDIVIDUAL_TEST`/
+  `EXAM_PACKAGE`/`TEST_SERIES`/blanket `SUBSCRIPTION`/`ALL_ACCESS`, not
+  `SUBJECT_PACKAGE` — ADR-026), enforces `attemptPolicy=SINGLE` and the
+  entitlement's `attemptLimit`/`attemptsUsed`, selects questions via the
+  right strategy, and creates `attempts`+`attempt_questions` (+ increments
+  `entitlements.attempts_used`) in **one transaction**. An existing
+  `IN_PROGRESS` attempt is resumed (returned as-is), not treated as an
+  error — verified this doesn't double-charge the entitlement.
+- **Question selection strategies implemented**
+  (`src/strategies/questionSelection/`): `ManualSelectionStrategy` (uses
+  `test_questions` directly) and `RuleBasedSelectionStrategy` (randomly
+  picks `question_count` approved+published questions per `test_rules` row,
+  excluding questions already used by an earlier rule in the same attempt,
+  tag-filtered "any of"). Both verified against the real database,
+  including a rule-based attempt that correctly selected 2 distinct
+  questions from the available pool.
+- **`GET /attempts/:attemptId`**: safe attempt detail (never `is_correct`/
+  `correct_option_id`), computed `remainingSeconds`, auto-submits first if
+  expired.
+- **`PUT /attempts/:attemptId/questions/:attemptQuestionId/answer`**:
+  ownership + status + time + option-validity checks
+  (`errorCode INVALID_OPTION` — its first real use since Phase 1),
+  upserts `attempt_answers`.
+- **`POST /attempts/:attemptId/submit`**: row-locked
+  (`transaction.LOCK.UPDATE`), idempotent (resubmitting returns the
+  identical result, doesn't recompute — verified), evaluates via
+  `getEvaluator(questionType)` (`src/strategies/evaluation/` —
+  `McqSingleEvaluator` implemented; any other type falls back to
+  UNANSWERED/0 rather than crashing, see Known Issues), creates
+  `results`+`result_details`. **Scoring hand-verified**: 1 correct (1.00),
+  1 incorrect (−0.25), 2 unanswered → 18.75% / 50% accuracy, matched
+  exactly.
+- **`GET /attempts/:attemptId/result`**: shapes its response around the
+  test's `show_score`/`show_correct_answers`/`show_rank`/`show_percentile`
+  flags; `errorCode RESULT_NOT_RELEASED` if `result_visibility` isn't
+  `IMMEDIATE` and nothing has released it yet (Phase 8 territory).
+- **Backend-authoritative timer, verified with a real clock**: created a
+  test with a 1–2 second duration, waited past expiry, and confirmed `GET
+  /attempts/:id` transparently auto-submitted it (`auto_submitted=true`,
+  a `results` row existed, unanswered questions scored 0) — the student
+  never called `/submit`.
+- **`GET /tests`, `GET /tests/:testId`** (public-to-authenticated-users test
+  browsing, `testBrowseService.ts`): published tests only, within their
+  availability window.
+- **`attemptPolicy` (`src/policies/attemptPolicy.ts`)**: the first real
+  implementation of the "policies" layer `docs/ARCHITECTURE.md` has
+  described since Phase 1 — `ensureOwnsAttempt` checks data-scoped
+  ownership, not a permission code, since a student has no `attempt.*`
+  permission for their own records.
+
+### Entitlement grant (explicitly requested by the project owner)
+
+- **`POST /admin/entitlements`** (`entitlement.grant` permission, new this
+  phase): grants a student access using the **real**
+  `products`/`product_items`/`entitlements` tables — given a `testId`,
+  finds-or-creates the minimal `INDIVIDUAL_TEST` product/product_item
+  (reused across repeated grants for the same test); given a
+  `productItemId`, grants directly (forward-compatible with Phase 9's real
+  catalog). **Idempotent** (verified: granting twice returns the same
+  entitlement, 200 not 201, no duplicate row). Audit-logged
+  (`entitlement.grant` — the sixth spec-section-46 action now covered).
+  See ADR-025 for the full reasoning (spec's own phase order puts Exam
+  Engine before Commerce, and `docs/COMMERCE_AND_PAYMENTS.md` already
+  documented admin overrides as a planned feature — this isn't new scope).
+- `src/repositories/productRepository.ts` created narrow and deliberately
+  incomplete — only what the grant flow needs; Phase 9 extends it.
+
+### Two real bugs found by manual testing and fixed (see docs/DECISIONS.md ADR-028, docs/SECURITY.md)
+
+1. **Security**: `createAttempt()`'s success response initially leaked
+   `is_correct`/`correct_option_id` (it returned a raw eager-loaded query
+   result instead of routing through the sanitizing serializer
+   `getAttemptDetail()` uses). Caught by grepping the actual HTTP response
+   during manual testing, not by type-checking. Fixed by making
+   `createAttempt()` call `getAttemptDetail()` for its response — there is
+   now exactly one code path that ever serializes attempt-question data for
+   a student.
+2. **Data integrity**: a 4-level-deep Sequelize `include` chain (attempt →
+   attempt_questions → question_version → options → translations) produced
+   column aliases longer than PostgreSQL's 63-byte identifier limit;
+   Postgres silently truncated them (e.g. `questionOptionId` →
+   `questionO`), so Sequelize mapped values onto wrong/mangled attribute
+   names — the query succeeded but option text came back missing. Fixed
+   with `separate: true` on the nested associations
+   (`src/repositories/attemptRepository.ts`), which runs each as its own
+   short-alias query instead. Recorded as ADR-028 since this failure mode
+   is silent (no error thrown) and will recur in any future deeply-nested
+   include if not watched for.
+
+### Testing
+
 - **5 new automated integration tests**
-  (`tests/integration/testBuilder.test.ts`): STUDENT rejection, empty-test
-  validation/publish failure, unapproved-question rejection, the full
-  publish→edit-blocked→close→archive flow (asserting both status
-  transitions and the `audit_logs` rows for publish/close), and
-  `RULE_BASED` validation against the real question pool (fails at 5
-  required/1 available, passes after lowering to 1).
+  (`tests/integration/attempt.test.ts`): entitlement-required rejection,
+  the full grant→create→answer→ownership-enforcement→submit→idempotent-
+  resubmit→result flow (including the is_correct-leak regression check),
+  auto-submit-on-timer-expiry, SINGLE attempt policy enforcement, and —
+  closing a long-open Known Issues item — **a direct test of the Phase 2
+  partial unique index on `attempts`**, inserting two `IN_PROGRESS` rows
+  for the same user/test via the model directly and asserting Postgres
+  itself rejects the second (`SequelizeUniqueConstraintError`, Postgres
+  code `23505`) — not just that the service layer's own pre-check would
+  catch it.
+- Seeder `20260913100009-entitlement-permissions.js` (`entitlement.grant`),
+  run against dev + test databases.
+- New error codes: `USER_NOT_FOUND`, `RESULT_NOT_RELEASED`.
 
 ## In Progress
 
-Nothing — Phase 6 scope is complete.
+Nothing — Phase 7 scope is complete.
 
 ## Blocked
 
@@ -109,34 +158,28 @@ None.
 
 ## Known Issues
 
-None new — see `docs/KNOWN_ISSUES.md` for what's still open (Phase 2 DB
-constraint tests, non-MCQ_SINGLE validation, no tag browse endpoint).
+New this phase (see `docs/KNOWN_ISSUES.md` for full detail): no
+entitlement list/browse/revoke endpoint yet; `SUBJECT_PACKAGE` entitlements
+grant no test access (no defined resolution rule); `rank`/`percentile`
+always `null` (Phase 8); `randomize_options` not implemented; a few
+Security Test Coverage checklist items are implied-but-not-separately-
+tested. The `product_items` CHECK constraint (unlike the `attempts` partial
+unique index, now tested) still has no automated test.
 
 ## Next Recommended Task
 
-Phase 7: Exam Engine (attempt lifecycle). Per spec sections 15/26–30:
-- Attempt creation: validate auth + entitlement (entitlements don't exist as
-  a concept with real data yet — Phase 9/10 — so this check will need a
-  temporary bypass or a note that it's incomplete until commerce exists;
-  decide which explicitly rather than silently skipping it) + test status/
-  schedule + attempt policy/limits + question availability, then create
-  `attempts` + `attempt_questions` in one transaction (ADR-008 snapshot:
-  question_id/question_version_id/order/marks frozen at this moment).
-- For `RULE_BASED` tests, this is where `countApprovedQuestions()` needs a
-  sibling that actually *selects* (not just counts) matching questions per
-  rule's `selection_strategy` — the concrete `ManualSelectionStrategy`/
-  `RuleBasedSelectionStrategy` from `docs/EXAM_ENGINE.md` that this phase
-  left as "planned."
-- Backend-authoritative timer (`started_at`/`expires_at`).
-- Answer autosave endpoint (`attempt_answers` upsert).
-- Transactional, idempotent submission + evaluation (`MCQ_SINGLE` evaluator
-  first, matching what's actually buildable today) + `results`/
-  `result_details` creation.
-- This phase will make real use of the partial unique index on `attempts`
-  (one `IN_PROGRESS` attempt per user/test) from Phase 2 — a good moment to
-  also close the long-open Known Issues item about the DB constraints never
-  having an automated test, since this phase will be exercising that exact
-  constraint under test anyway.
+Phase 8: Results. Per spec sections 16/24: rank/percentile computation
+across all `EVALUATED` results for a test (a cross-attempt aggregate —
+decide whether this recomputes on every new submission or runs as a
+periodic/on-demand batch job before implementing, since recomputing
+everyone's rank on every single submission doesn't scale and going stale
+between submissions is the realistic tradeoff), the admin result-release
+workflow (`results.released_at`, permission `result.release` — already
+seeded), and admin result browsing (`result.view` — already seeded,
+`GET /admin/results` doesn't exist yet). This phase should also add the
+still-missing `GET /admin/entitlements` (list/browse) and a revoke action
+if Commerce work starts touching entitlements before Phase 9 proper
+begins — otherwise leave that for Phase 9.
 
 ## Last Updated
 
@@ -144,48 +187,64 @@ Phase 7: Exam Engine (attempt lifecycle). Per spec sections 15/26–30:
 
 ## Last Development Session
 
-Implemented and verified Phase 6 (Test Builder): full test CRUD and
-lifecycle (DRAFT→PUBLISHED→CLOSED→ARCHIVED), a validation engine that
-checks both MANUAL (has questions) and RULE_BASED (rules satisfiable against
-the real approved-question pool) tests before allowing publish and persists
-the computed totals, sections/manual-question-assignment/rules CRUD, and a
-DRAFT-only editability rule (ADR-024) that closes a snapshot-safety gap
-ahead of Phase 7 needing it. This was the first real use of
-`QUESTION_NOT_APPROVED` (defined since Phase 1) and extended `audit_logs` to
-`test.publish`/`test.close`.
+Implemented and verified Phase 7 (Exam Engine): attempt creation with real
+manual/rule-based question selection and snapshotting, backend-
+authoritative timing with verified auto-submit-on-expiry, answer autosave,
+transactional idempotent submission with hand-verified MCQ_SINGLE scoring,
+and result retrieval respecting test visibility flags. Also built, at the
+project owner's explicit request, a minimal but real admin
+entitlement-grant endpoint (reusing the actual commerce tables) so the
+whole flow is testable via the API today, not just via test fixtures —
+ahead of Commerce (Phase 9) per the spec's own phase ordering. Manual
+end-to-end testing caught and fixed two real bugs (a correctness-data
+security leak, and a silent Postgres identifier-truncation data-corruption
+bug from deeply nested Sequelize includes) that neither type-checking nor
+a narrower unit test would have caught — both are now documented as ADRs
+so they don't recur. Closed a long-open Known Issues item by adding a
+direct database-level test of the `attempts` partial unique index.
 
 ## Important Files Changed
 
-- `src/errors/errorCodes.ts` (modified — `TEST_NOT_EDITABLE`, `TEST_INVALID_STATUS_TRANSITION`)
-- `src/repositories/{testRepository.ts,testSectionRepository.ts,testQuestionRepository.ts,testRuleRepository.ts}` (created)
-- `src/repositories/questionRepository.ts` (modified — `countApprovedQuestions`)
-- `src/services/{testService.ts,testSectionService.ts,testQuestionService.ts,testRuleService.ts}` (created)
-- `src/validations/testBuilder.validation.ts` (created)
-- `src/controllers/testBuilderController.ts` (created)
-- `src/api/v1/routes/testBuilder.routes.ts` (created)
-- `src/app.ts` (modified — mounts `testBuilderRouter`)
-- `src/models/{Test.ts,TestRule.ts}` (modified — association mixin types)
-- `tests/integration/testBuilder.test.ts` (created)
-- `docs/API.md` (test builder endpoints documented), `docs/AUTHENTICATION.md`
-  (permission list updated), `docs/DECISIONS.md` (ADR-024), `docs/SECURITY.md`
-  (Auditability — test.publish/close added), `docs/EXAM_ENGINE.md`
-  (Question Selection Strategies section — status clarified: admin-side
-  setup done, attempt-time selection still planned)
+- `src/errors/errorCodes.ts` (modified — `USER_NOT_FOUND`, `RESULT_NOT_RELEASED`)
+- `src/repositories/{attemptRepository.ts,entitlementRepository.ts,productRepository.ts}` (created)
+- `src/repositories/questionRepository.ts` (modified — `countApprovedQuestions` reused by rule-based selection)
+- `src/services/{attemptService.ts,entitlementService.ts,testBrowseService.ts}` (created)
+- `src/policies/attemptPolicy.ts` (created)
+- `src/strategies/questionSelection/{QuestionSelectionStrategy.ts,ManualSelectionStrategy.ts,RuleBasedSelectionStrategy.ts,index.ts}` (created)
+- `src/strategies/evaluation/{Evaluator.ts,McqSingleEvaluator.ts,index.ts}` (created)
+- `src/utils/shuffle.ts` (created)
+- `src/validations/{attempt.validation.ts,entitlement.validation.ts}` (created)
+- `src/controllers/{attemptController.ts,testBrowseController.ts,entitlementController.ts}` (created)
+- `src/api/v1/routes/{student.routes.ts,entitlement.routes.ts}` (created)
+- `src/app.ts` (modified — mounts new routers)
+- `src/models/{Attempt.ts,AttemptQuestion.ts,QuestionVersion.ts,QuestionOption.ts,Test.ts,TestRule.ts}` (modified — association mixin types)
+- `src/seeders/20260913100009-entitlement-permissions.js` (created, run against dev + test DBs)
+- `tests/integration/attempt.test.ts` (created)
+- `docs/EXAM_ENGINE.md` (rewritten for the as-built engine, including both
+  bugs found), `docs/SECURITY.md` (bug documented, coverage checklist
+  turned into a checked/unchecked list), `docs/API.md` (student + admin
+  entitlement endpoints documented), `docs/AUTHENTICATION.md` (permission +
+  policy-layer updates), `docs/COMMERCE_AND_PAYMENTS.md` (entitlement
+  resolution + admin override sections marked implemented),
+  `docs/DECISIONS.md` (ADR-025 through ADR-028)
 
 ## Database Changes
 
-None (no migrations) — Phase 6 used the existing `tests`, `test_sections`,
-`test_questions`, `test_rules`, `test_rule_tags` tables from Phase 2 as-is.
+None (no migrations) — Phase 7 used the existing `attempts`,
+`attempt_questions`, `attempt_answers`, `results`, `result_details`,
+`entitlements`, `products`, `product_items` tables from Phase 2 as-is,
+plus 1 new `permissions` row (`entitlement.grant`) via a seeder.
 
 ## API Changes
 
-Added (see `docs/API.md` for full request/response shapes), all under
-`/api/v1/admin`:
-- `GET/POST /tests`, `GET/PUT/DELETE /tests/:testId`
-- `GET /tests/:testId/validate`, `POST /tests/:testId/{publish,close,archive}`
-- `GET/POST /tests/:testId/sections`, `PUT/DELETE /tests/:testId/sections/:id`
-- `GET/POST /tests/:testId/questions`, `DELETE /tests/:testId/questions/:id`
-- `GET/POST /tests/:testId/rules`, `PUT/DELETE /tests/:testId/rules/:id`
+Added (see `docs/API.md` for full request/response shapes):
+- `GET /tests`, `GET /tests/:testId` (public-to-authenticated-users)
+- `POST /tests/:testId/attempts`
+- `GET /attempts/:attemptId`
+- `PUT /attempts/:attemptId/questions/:attemptQuestionId/answer`
+- `POST /attempts/:attemptId/submit`
+- `GET /attempts/:attemptId/result`
+- `POST /admin/entitlements`
 
 ## Testing Status
 
@@ -193,25 +252,29 @@ Added (see `docs/API.md` for full request/response shapes), all under
 - `tests/integration/auth.test.ts` — 5 tests (Phase 3).
 - `tests/integration/catalog.test.ts` — 6 tests (Phase 4).
 - `tests/integration/questionBank.test.ts` — 7 tests (Phase 5).
-- `tests/integration/testBuilder.test.ts` — 5 tests (this phase).
-- Total: 24 tests, all passing against the real test database (sequential —
-  see Phase 5's `fileParallelism: false` note, still in effect).
-- Still open: no automated test for the Phase 2 DB constraints themselves —
-  Phase 7 is a natural place to close this (see Next Recommended Task).
+- `tests/integration/testBuilder.test.ts` — 5 tests (Phase 6).
+- `tests/integration/attempt.test.ts` — 5 tests (this phase).
+- Total: 29 tests, all passing against the real test database.
+- Still open: the `product_items` CHECK constraint has no automated test
+  (the `attempts` partial unique index now does — see Known Issues).
 
 ## Handover Notes
 
-- **A test can only be structurally edited while `DRAFT`.** This applies to
-  its own basic-info fields too, not just sections/questions/rules — there
-  is currently no way to fix a typo in a `PUBLISHED` test's title without
-  closing/archiving it and starting over. If that proves too restrictive in
-  practice, add a narrower "edit non-structural fields" path rather than
-  loosening `ensureTestEditable()` globally (see ADR-024's Consequences).
-- `publishTest()` **overwrites** `total_questions`/`total_marks` with
-  computed values — don't rely on whatever was set at test creation time
-  surviving to publish; it won't.
-- Test archive is intentionally not audit-logged and reuses `test.close`'s
-  permission — don't "fix" either of these without checking ADR-024 and
-  spec section 46/25 first.
+- **Any new endpoint that returns attempt-question data must reuse
+  `getAttemptDetail()`'s serialization, never eager-load-and-return
+  directly.** This is the exact bug Phase 7 shipped and then caught —
+  don't reintroduce it in Phase 8+ (e.g. an admin "view a student's
+  attempt" endpoint must build its own explicit view, deciding what an
+  admin is allowed to see, rather than copy-pasting the student path).
+- **Any Sequelize `include` 4+ levels deep needs `separate: true`
+  somewhere in the chain**, or column aliases silently truncate past
+  Postgres's 63-byte identifier limit and data comes back under the wrong
+  field name with no error. See ADR-028 before adding new deep includes
+  (results with nested question/option data in Phase 8 is a likely place
+  this recurs).
+- The entitlement-grant endpoint is real infrastructure, not a testing
+  shortcut — Phase 9 should extend `productRepository.ts`/
+  `entitlementService.ts`, not replace them with a parallel
+  order/payment-driven path.
 - Read `CLAUDE.md` and this file first in any new session before writing
   code.

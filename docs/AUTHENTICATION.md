@@ -91,19 +91,20 @@ Initial roles: `SUPER_ADMIN`, `ADMIN`, `STUDENT` (seeded — see
 `EXAM_MANAGER`, `CONTENT_EDITOR`, `SUPPORT`, `FINANCE`) must be addable by
 inserting rows, not by adding code branches.
 
-Permission codes currently seeded (28 total): the 20 concrete examples from
+Permission codes currently seeded (29 total): the 20 concrete examples from
 spec section 25, plus 4 `catalog.*` codes added in Phase 4 for
 categories/exams/series admin CRUD (ADR-021), plus 4 `subject.*` codes added
 in Phase 5 for subjects/topics admin CRUD (ADR-022 — same "one shared family
-per nested hierarchy" reasoning). `question.*` and `test.*` (both already
-seeded in Phase 1's baseline list) went unused until Phases 5 and 6
-respectively wired them to real routes — `view`/`create`/`update` gate the
-CRUD + versioning/section/rule endpoints, `approve`/`reject`/`validate`/
-`publish`/`close` gate their namesake workflow endpoints, and `update` is
-also reused to gate deletion for both families (no separate `question.delete`
-or `test.delete`/`test.archive` code exists — spec's example lists stop
-short of those; test archive reuses `test.close`, see ADR-024). Extend as
-each further admin module is built.
+per nested hierarchy" reasoning), plus `entitlement.grant` added in Phase 7
+(ADR-025). `question.*` and `test.*` (both already seeded in Phase 1's
+baseline list) went unused until Phases 5 and 6 respectively wired them to
+real routes — `view`/`create`/`update` gate the CRUD + versioning/section/
+rule endpoints, `approve`/`reject`/`validate`/`publish`/`close` gate their
+namesake workflow endpoints, and `update` is also reused to gate deletion
+for both families (no separate `question.delete` or `test.delete`/
+`test.archive` code exists — spec's example lists stop short of those; test
+archive reuses `test.close`, see ADR-024). Extend as each further admin
+module is built.
 
 ```
 question.view, question.create, question.update, question.approve, question.reject
@@ -116,6 +117,7 @@ result.view, result.release
 ai.generate
 catalog.view, catalog.create, catalog.update, catalog.delete
 subject.view, subject.create, subject.update, subject.delete
+entitlement.grant
 ```
 
 `requirePermission(code)` (`src/middleware/auth.ts`) resolves the current
@@ -126,10 +128,20 @@ must run *after* `authenticate` (which populates `req.currentUser`).
 real caller (all 15 category/exam/series routes), and
 `tests/integration/catalog.test.ts` confirms both directions — a
 `catalog.*`-less user (STUDENT) gets `FORBIDDEN`, and SUPER_ADMIN (granted
-`catalog.*` via the seeders) succeeds. Services needing finer-grained,
-data-dependent checks (e.g. "is this the student's own attempt") should use
-a policy function, not inline role checks — no such policy exists yet
-(nothing has needed one before Phase 6/attempts).
+`catalog.*` via the seeders) succeeds.
+
+**Data-scoped authorization (policies) — implemented in Phase 7.**
+`src/policies/attemptPolicy.ts`'s `ensureOwnsAttempt(attempt, userId)` is
+the first real policy function (`docs/ARCHITECTURE.md` described this
+layer since Phase 1; nothing needed it before attempts existed). All five
+student-facing attempt routes (`GET`/`PUT`/`POST .../attempts/:id...`) use
+`authenticate` (any logged-in user — no permission code, since a student
+has no `attempt.*` permission) plus this policy check, rather than
+`requirePermission`. `attempt.view` (already seeded) is reserved for the
+*admin* "view any student's attempt" use case, not yet built — do not
+confuse the two: a route either checks "is the caller an admin with this
+permission" or "does the caller own this specific record," never both
+loosely combined into one ad hoc check.
 
 ## Session Model
 

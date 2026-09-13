@@ -698,3 +698,184 @@ Consequences:
   a typo without a full unpublish cycle), it should be a new, narrower
   endpoint — not a loosening of `ensureTestEditable()`, which several other
   services depend on for the DRAFT-only guarantee.
+
+---
+
+## ADR-025: Minimal Admin Entitlement Grant Ahead of Full Commerce
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+`POST /admin/entitlements` (`entitlement.grant` permission) lets an admin
+manually grant a student access to a test, using the **real**
+`products`/`product_items`/`entitlements` tables — not a parallel or
+temporary mechanism. Given either `testId` or an existing `productItemId`:
+- `testId` path: finds an existing `INDIVIDUAL_TEST` product_item for that
+  test, or creates the minimal `Product` (`productType: INDIVIDUAL_TEST`)
+  + `ProductItem` needed, reusing it for every future grant against the
+  same test rather than creating a new product per grant.
+- `productItemId` path: grants directly against an existing item (forward
+  compatible with Phase 9's real product catalog).
+
+Idempotent: granting to a user who already holds an active entitlement for
+that product_item returns the existing row (200) rather than erroring or
+duplicating. Every grant writes an `audit_logs` row
+(`entitlement.grant` — spec section 46 lists "entitlement changes").
+`orderId` stays null (no fake payment record is created); `grantedBy` +
+`metadata.source = 'ADMIN_GRANT'` record who granted it and why.
+
+Reason:
+The master spec's own phase order puts Exam Engine (7) before Commerce (9)
+and Payments (10) — meaning attempt creation's entitlement check has to
+exist and be enforced *before* there's any self-service way to obtain an
+entitlement. `docs/COMMERCE_AND_PAYMENTS.md` already documented "an admin
+may grant an entitlement manually" as a planned feature (Admin Overrides),
+so this isn't new scope invented for testing convenience — it's that
+feature, built now because Phase 7 needs it to be end-to-end testable via
+the real API (not just fixtures inside test files).
+
+Alternatives:
+Entitlement check only, with entitlement rows created solely via direct
+Sequelize calls in tests — rejected per explicit project-owner direction;
+would leave no way to manually test the purchase-adjacent flow via
+curl/Postman until Phase 9 exists.
+A duplicate/simplified grant table separate from `entitlements` — rejected;
+the user explicitly required reusing the same commerce tables so Phase 9
+extends this rather than replacing it.
+
+Consequences:
+- `src/repositories/productRepository.ts` is deliberately narrow (find/create
+  only what the grant flow needs) — Phase 9 owns full product/pricing CRUD
+  and should extend, not replace, this file.
+- There is no revoke or list/browse endpoint yet (`GET /admin/entitlements`
+  doesn't exist) — verify via direct DB query or Phase 9's tooling until
+  built; see `docs/KNOWN_ISSUES.md`.
+- The attempt engine's entitlement *check* (`findActiveEntitlementForTest`)
+  never bypasses or shortcuts because of this endpoint's existence — it
+  queries the same `entitlements` table a real purchase would populate.
+
+---
+
+## ADR-026: Entitlement-to-Test Resolution Priority (SUBJECT_PACKAGE Deferred)
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+`findActiveEntitlementForTest()` (`src/services/entitlementService.ts`)
+resolves which `product_items` would grant access to a given test by
+checking, in effect simultaneously: an exact `INDIVIDUAL_TEST` match, an
+`EXAM_PACKAGE` matching the test's `competitive_exam_id`, a `TEST_SERIES`
+match if the test belongs to one, or any blanket `SUBSCRIPTION`/
+`ALL_ACCESS` item (no target columns, per the Phase 2 CHECK constraint).
+**`SUBJECT_PACKAGE` is deliberately not resolved** — no active
+subject-package entitlement will ever grant attempt access to a test today.
+
+Reason:
+A test is not scoped to a single subject (`tests` has no `subject_id`; its
+questions can span many subjects via `test_questions`/`test_rules`), so
+"does this test belong to that subject package" has no unambiguous answer
+without a further, unspecified rule (e.g. "majority of questions",
+"section-scoped subject match"). Spec doesn't define one. Guessing at a
+rule here risks silently granting or denying access incorrectly — worse
+than clearly not supporting it yet.
+
+Alternatives:
+Match if *any* question in the test belongs to the subject — rejected, far
+too permissive (a single stray question would unlock the whole test).
+Match if *all* questions belong to the subject — rejected, too fragile
+(one off-topic question added later would silently revoke access for
+existing SUBJECT_PACKAGE holders).
+
+Consequences:
+A `SUBJECT_PACKAGE` product/entitlement can be created (schema supports it)
+but currently grants no actual test access — documented in
+`docs/KNOWN_ISSUES.md`. Resolve this by specifying and implementing a
+concrete subject-matching rule if/when SUBJECT_PACKAGE products are
+actually needed.
+
+---
+
+## ADR-027: Rank and Percentile Deferred to Phase 8
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+`results.rank`/`results.percentile` are always `null` after Phase 7's
+`submitAttempt()`. The `GET .../result` response includes them (as `null`)
+only when the test's `show_rank`/`show_percentile` flags are set — the
+fields exist and are wired through, but nothing computes a value yet.
+
+Reason:
+Rank/percentile are inherently cross-attempt: computing them requires
+comparing one student's score against every other `EVALUATED` result for
+the same test, which is a different kind of operation (a batch/aggregate
+query, plausibly recomputed as more students finish, not a per-submission
+side effect) than the rest of `submitAttempt()`, which only ever touches
+one attempt's own rows. The master spec's own phase split names "Results"
+as a separate phase (8) from "Exam engine" (7) — this is the natural
+boundary: Phase 7 produces a correct, ungraded-on-a-curve score per
+attempt; Phase 8 adds the cross-attempt aggregation and the admin
+release/publish-results workflow implied by `results.released_at`.
+
+Alternatives:
+Compute rank/percentile inline during `submitAttempt()` by querying all
+prior results for the test — rejected: ranks for already-submitted
+students would go stale every time a new student submits, requiring a
+recompute-everyone pass anyway, which belongs in its own service, not
+bolted onto the submission transaction.
+
+Consequences:
+`GET .../result` for a test with `show_rank: true` currently always
+returns `rank: null` — this is correct-but-incomplete, not a bug; Phase 8
+should backfill/compute it without needing to touch `submitAttempt()`.
+
+---
+
+## ADR-028: Deeply Nested Sequelize Includes Must Use `separate: true`
+
+Date: 2026-09-13
+Status: Accepted
+
+Decision:
+Any Sequelize `include` chain 4 levels deep or more (e.g. attempt →
+attempt_questions → question_version → options → translations) must mark
+the `hasMany` associations partway down the chain with `separate: true`
+(see `src/repositories/attemptRepository.ts`), rather than relying on a
+single query with everything joined.
+
+Reason:
+**Found via manual testing, not a hypothetical**: a single joined query
+this deep produces column aliases like
+`"attemptQuestions.questionVersion.options.translations.questionOptionId"`
+— longer than PostgreSQL's 63-byte identifier limit (`NAMEDATALEN`).
+Postgres silently truncates the alias to
+`"...options.translations.questionO"` rather than erroring, so Sequelize
+maps the value back onto a mangled, wrong attribute name
+(`questionO`/`languageC`/`optionTex` instead of
+`questionOptionId`/`languageCode`/`optionText`) — the query succeeds, the
+data is silently wrong. This surfaced as attempt-question options being
+returned with no visible option text (the `text` field the serializer
+tried to read simply didn't exist under its expected name).
+`separate: true` runs that association as its own follow-up query instead,
+keeping every alias short.
+
+Alternatives:
+Manually alias every column to something short — rejected, fragile and
+easy to get wrong again on the next nested include added anywhere in the
+chain. Flattening the data model to avoid deep nesting — not applicable;
+the nesting reflects real, necessary relationships (a question's version
+has options, options have per-language translations).
+
+Consequences:
+- Whenever a new deeply-nested `include` is added anywywhere in the
+  codebase (attempts, results, or future features), check the resulting
+  alias depth and add `separate: true` proactively rather than waiting to
+  hit this failure mode again — it does not throw, it silently corrupts
+  field names, which is far more dangerous than a query error.
+- `separate: true` associations can't be filtered via a `where` on the
+  *parent* query in the same call (they run as independent queries) — this
+  hasn't been a limitation yet but will matter if a future query needs to
+  filter attempt_questions by a nested option/translation property.

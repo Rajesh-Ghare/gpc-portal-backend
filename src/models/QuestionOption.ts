@@ -1,4 +1,13 @@
-import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, Sequelize } from 'sequelize';
+import {
+  CreationOptional,
+  DataTypes,
+  InferAttributes,
+  InferCreationAttributes,
+  Model,
+  NonAttribute,
+  Sequelize,
+} from 'sequelize';
+import type { QuestionOptionTranslation } from './QuestionOptionTranslation';
 
 export class QuestionOption extends Model<InferAttributes<QuestionOption>, InferCreationAttributes<QuestionOption>> {
   declare id: CreationOptional<string>;
@@ -10,6 +19,8 @@ export class QuestionOption extends Model<InferAttributes<QuestionOption>, Infer
   declare metadata: CreationOptional<Record<string, unknown>>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
+
+  declare translations?: NonAttribute<QuestionOptionTranslation[]>;
 
   static associate(models: {
     QuestionVersion: typeof import('./QuestionVersion').QuestionVersion;

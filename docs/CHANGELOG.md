@@ -72,6 +72,23 @@
   approved-question pool; `publishTest()` runs it and persists the computed
   totals. Extends `audit_logs` to `test.publish`/`test.close`. Verified
   manually and via 5 new integration tests.
+- Exam engine (attempts): full lifecycle — `POST /tests/:id/attempts`
+  (manual + rule-based question selection and snapshotting, entitlement +
+  attempt-policy enforcement, one-transaction creation), answer autosave,
+  backend-authoritative timer with verified auto-submit-on-expiry,
+  transactional idempotent submission with MCQ_SINGLE evaluation
+  (hand-verified scoring), and result retrieval respecting a test's
+  visibility flags. `GET /tests`/`GET /tests/:id` for published-test
+  browsing. First real use of the policy layer
+  (`src/policies/attemptPolicy.ts`) for data-scoped (not permission-code)
+  authorization. Verified manually (including a real-clock timer-expiry
+  test) and via 5 new integration tests, one of which directly exercises
+  the Phase 2 `attempts` partial unique index at the database level.
+- Minimal admin entitlement grant (`POST /admin/entitlements`,
+  `entitlement.grant` permission), built ahead of full Commerce at the
+  project owner's explicit request: uses the real `products`/
+  `product_items`/`entitlements` tables, is idempotent, and is
+  audit-logged. See ADR-025.
 
 ### Changed
 
@@ -91,11 +108,21 @@
 
 ### Fixed
 
-(none)
+- Deeply nested Sequelize `include` chains (4+ levels — attempt →
+  attempt_questions → question_version → options → translations) were
+  silently corrupting field names: PostgreSQL truncates column aliases
+  over 63 bytes, and Sequelize was mapping values onto the truncated
+  (wrong) attribute names with no error thrown. Fixed with `separate: true`
+  on the nested associations. See ADR-028.
 
 ### Security
 
-(none)
+- Fixed a real bug found during Phase 7 manual testing: `POST
+  /tests/:id/attempts`'s response leaked `is_correct`/`correct_option_id`
+  on every option (it built its response from a raw eager-loaded query
+  instead of the sanitizing serializer `GET /attempts/:id` already used).
+  There is now exactly one code path that serializes attempt-question data
+  for a student.
 
 ### Database
 
@@ -109,15 +136,18 @@
   `docs/EXAM_ENGINE.md`, `docs/AUTHENTICATION.md`,
   `docs/COMMERCE_AND_PAYMENTS.md`, `docs/AI.md`, `docs/SECURITY.md`,
   `docs/DEPLOYMENT.md`, `docs/TESTING.md`, `docs/DECISIONS.md`
-  (ADR-001 through ADR-024), `docs/KNOWN_ISSUES.md`,
+  (ADR-001 through ADR-028), `docs/KNOWN_ISSUES.md`,
   `docs/DEVELOPMENT_STATUS.md`, and root `CLAUDE.md`.
 - `docs/DATABASE.md` rewritten to describe the as-built schema (migration
   order, integrity rules, seeding, and modeling decisions made where the
   spec was ambiguous).
 - `docs/AUTHENTICATION.md` rewritten for the as-built auth flow;
-  `docs/API.md` updated with implemented auth, catalog, question-bank, and
-  test-builder endpoint shapes; `docs/SECURITY.md`'s Auditability section
-  updated to reflect the now-implemented (and intentionally scoped) audit
-  logging; `docs/EXAM_ENGINE.md`'s Question Selection Strategies section
-  updated to distinguish the now-implemented admin-side setup from the
-  still-planned attempt-time selection logic.
+  `docs/API.md` updated with implemented auth, catalog, question-bank,
+  test-builder, exam-engine, and entitlement-grant endpoint shapes;
+  `docs/SECURITY.md`'s Auditability section and Required Security Test
+  Coverage checklist updated to reflect the now-implemented (and
+  intentionally scoped) audit logging and what's actually been tested;
+  `docs/EXAM_ENGINE.md` rewritten end to end for the as-built engine,
+  including the two bugs found during implementation;
+  `docs/COMMERCE_AND_PAYMENTS.md` updated for the implemented entitlement
+  resolution and admin-grant override.

@@ -60,7 +60,9 @@ ENTITLEMENT_NOT_FOUND, ENTITLEMENT_EXPIRED
 
 AI_JOB_NOT_FOUND, AI_GENERATION_FAILED
 
-FORBIDDEN, VALIDATION_ERROR, INTERNAL_ERROR
+USER_NOT_FOUND, RESULT_NOT_RELEASED
+
+FORBIDDEN, VALIDATION_ERROR, NOT_FOUND, INTERNAL_ERROR
 ```
 
 ## Endpoints (Status Tracked in DEVELOPMENT_STATUS.md)
@@ -84,20 +86,54 @@ POST /auth/logout         (Authorization: Bearer <token>)
                           → {} — revokes the current session
 ```
 
-Everything else below is planned but not yet implemented; listed here as the
-contract to build toward.
+### Student (Test Browsing & Attempts) — Implemented (Phase 7)
 
-### Student
+Per spec section 2's flow (login happens before browsing), every route
+below requires `Authorization: Bearer <token>` but no admin permission —
+just a valid session. Attempt-specific routes additionally check ownership
+(`attemptPolicy.ensureOwnsAttempt`, `errorCode FORBIDDEN` if the attempt
+belongs to someone else) rather than a permission code.
 
 ```
-GET  /tests
-GET  /tests/:testId
-POST /tests/:testId/attempts
+GET  /tests                              → published tests only, within
+                                            their availableFrom/availableUntil
+                                            window if set
+GET  /tests/:testId                      → a single published test
+                                            errorCode TEST_NOT_FOUND if not published
 
-GET  /attempts/:attemptId
+POST /tests/:testId/attempts             → creates (or resumes an existing
+                                            IN_PROGRESS) attempt, with its
+                                            frozen attempt_questions (options
+                                            include text but never isCorrect
+                                            — see docs/SECURITY.md)
+                                            errorCode ENTITLEMENT_NOT_FOUND — no active entitlement
+                                            errorCode ATTEMPT_LIMIT_EXCEEDED — SINGLE policy already
+                                              used, or entitlement's attempt_limit reached
+                                            errorCode TEST_NOT_AVAILABLE — RULE_BASED test's rules
+                                              can't currently be satisfied
+
+GET  /attempts/:attemptId                → status, remainingSeconds (computed,
+                                            never trust a client clock), and
+                                            questions (no correctness data)
+                                            — auto-submits first if expired
+
 PUT  /attempts/:attemptId/questions/:attemptQuestionId/answer
-POST /attempts/:attemptId/submit
-GET  /attempts/:attemptId/result
+                                          { selectedOptionId?, answerText?, numericAnswer?, isMarkedForReview? }
+                                          errorCode INVALID_OPTION — option doesn't belong to this question
+                                          errorCode ATTEMPT_EXPIRED — time ran out (auto-submitted just now)
+                                          errorCode ATTEMPT_ALREADY_SUBMITTED — already explicitly submitted
+
+POST /attempts/:attemptId/submit         → evaluates (MCQ_SINGLE today — see
+                                            docs/EXAM_ENGINE.md), creates
+                                            results + result_details,
+                                            idempotent (resubmitting returns
+                                            the same result, doesn't recompute)
+
+GET  /attempts/:attemptId/result         → shape depends on the test's
+                                            show_score/show_correct_answers/
+                                            show_rank/show_percentile flags
+                                            errorCode RESULT_NOT_RELEASED — result_visibility isn't
+                                              IMMEDIATE and no released_at is set yet (Phase 8)
 ```
 
 ### Commerce (Student-Facing)
@@ -271,9 +307,28 @@ PUT    /admin/tests/:testId/rules/:id           requires test.update (DRAFT only
 DELETE /admin/tests/:testId/rules/:id           requires test.update (DRAFT only)
 ```
 
-Everything else in this section (products, prices, orders, payments,
-students, attempts, results, AI generation, AI job status, settings) is
-planned but not yet implemented.
+#### Entitlements — Minimal Admin Grant Implemented (Phase 7)
+
+A small, deliberate slice of Commerce built ahead of Phase 9 — see
+ADR-025. Uses the real `products`/`product_items`/`entitlements` tables.
+
+```
+POST /admin/entitlements                 requires entitlement.grant
+                                          { userId, testId? | productItemId?  (exactly one),
+                                            attemptLimit?, validFrom?, validUntil?, reason? }
+                                          → 201 + entitlement (new grant), or 200 + entitlement
+                                            with message "An active entitlement already existed"
+                                            (idempotent — never duplicates)
+                                          errorCode USER_NOT_FOUND / TEST_NOT_FOUND / NOT_FOUND
+                                            (productItemId given but doesn't exist)
+                                          Audit-logged (action: entitlement.grant)
+```
+
+No list/browse/revoke endpoint yet — see `docs/KNOWN_ISSUES.md`.
+
+Everything else in this section (products, prices, full order/payment flow,
+students, results, AI generation, AI job status, settings) is planned but
+not yet implemented.
 
 ## Conventions
 
