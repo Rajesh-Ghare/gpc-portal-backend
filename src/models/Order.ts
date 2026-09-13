@@ -8,6 +8,7 @@ import {
   Sequelize,
 } from 'sequelize';
 import type { OrderItem } from './OrderItem';
+import type { User } from './User';
 
 export class Order extends Model<InferAttributes<Order>, InferCreationAttributes<Order>> {
   declare id: CreationOptional<string>;
@@ -27,6 +28,7 @@ export class Order extends Model<InferAttributes<Order>, InferCreationAttributes
   declare updatedAt: CreationOptional<Date>;
 
   declare items?: NonAttribute<OrderItem[]>;
+  declare user?: NonAttribute<User>;
 
   static associate(models: {
     User: typeof import('./User').User;

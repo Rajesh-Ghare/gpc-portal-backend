@@ -14,7 +14,7 @@ export async function createOrderItem(data: CreationAttributes<OrderItem>, trans
 }
 
 export async function findOrderById(id: string) {
-  return Order.findByPk(id, { include: [{ association: 'items' }] });
+  return Order.findByPk(id, { include: [{ association: 'items' }, { association: 'user' }] });
 }
 
 export async function updateOrder(order: Order, data: Partial<InferAttributes<Order>>) {
@@ -35,7 +35,7 @@ export async function listOrders(filter: OrderFilter = {}) {
 
   return Order.findAll({
     where,
-    include: [{ association: 'items' }],
+    include: [{ association: 'items' }, { association: 'user' }],
     order: [['createdAt', 'DESC']],
   });
 }

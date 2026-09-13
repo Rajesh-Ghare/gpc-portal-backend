@@ -396,6 +396,9 @@ POST   /admin/products/:id/items                requires product.update
 DELETE /admin/products/:id/items/:itemId        requires product.update
 
 GET    /admin/orders?userId=&status=            requires order.view
+                                                 → orders + items[], each with `user`
+                                                 ({ id, mobileNumber, fullName, ... }) joined
+                                                 (added Phase 13, for the admin frontend)
 GET    /admin/orders/:orderId                   requires order.view
                                                  errorCode ORDER_NOT_FOUND
 ```
@@ -416,6 +419,9 @@ POST   /admin/entitlements               requires entitlement.grant
                                           Audit-logged (action: entitlement.grant)
 GET    /admin/entitlements?userId=&status=&productId=
                                           requires entitlement.view
+                                          → entitlements + `product`/`productItem`, each with
+                                          `user` joined too (added Phase 13, for the admin
+                                          frontend — same reasoning as /admin/orders above)
 DELETE /admin/entitlements/:id           requires entitlement.grant
                                           → sets status=REVOKED, revokedAt=now(); idempotent
                                             (revoking an already-revoked entitlement returns it

@@ -61,13 +61,15 @@ export async function listEntitlements(filter: EntitlementFilter = {}) {
 
   return Entitlement.findAll({
     where,
-    include: [{ association: 'product' }, { association: 'productItem' }],
+    include: [{ association: 'product' }, { association: 'productItem' }, { association: 'user' }],
     order: [['createdAt', 'DESC']],
   });
 }
 
 export async function findEntitlementById(id: string) {
-  return Entitlement.findByPk(id, { include: [{ association: 'product' }, { association: 'productItem' }] });
+  return Entitlement.findByPk(id, {
+    include: [{ association: 'product' }, { association: 'productItem' }, { association: 'user' }],
+  });
 }
 
 export async function revokeEntitlement(entitlement: Entitlement) {

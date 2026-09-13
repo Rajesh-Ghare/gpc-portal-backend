@@ -9,6 +9,7 @@ import {
 } from 'sequelize';
 import type { Product } from './Product';
 import type { ProductItem } from './ProductItem';
+import type { User } from './User';
 
 export class Entitlement extends Model<InferAttributes<Entitlement>, InferCreationAttributes<Entitlement>> {
   declare id: CreationOptional<string>;
@@ -29,6 +30,7 @@ export class Entitlement extends Model<InferAttributes<Entitlement>, InferCreati
 
   declare product?: NonAttribute<Product>;
   declare productItem?: NonAttribute<ProductItem>;
+  declare user?: NonAttribute<User>;
 
   static associate(models: {
     User: typeof import('./User').User;

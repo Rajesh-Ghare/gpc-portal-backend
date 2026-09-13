@@ -180,10 +180,11 @@ describe('Commerce (products, prices, items, orders, entitlement list/revoke)', 
     expect(res.body.errorCode).toBe('FORBIDDEN');
   });
 
-  it('admin can list all orders including the student\'s new one', async () => {
+  it('admin can list all orders including the student\'s new one, with the student joined', async () => {
     const res = await request(app).get('/api/v1/admin/orders').set('Authorization', `Bearer ${adminToken}`).expect(200);
     const forStudent = res.body.data.filter((o: { userId: string }) => o.userId === studentA.userId);
     expect(forStudent.length).toBeGreaterThan(0);
+    expect(forStudent[0].user?.mobileNumber).toBe(STUDENT_A_MOBILE);
   });
 
   it('grants, lists, and idempotently revokes an entitlement', async () => {
@@ -199,6 +200,8 @@ describe('Commerce (products, prices, items, orders, entitlement list/revoke)', 
       .set('Authorization', `Bearer ${adminToken}`)
       .expect(200);
     expect(listRes.body.data.some((e: { id: string }) => e.id === entitlementId)).toBe(true);
+    const found = listRes.body.data.find((e: { id: string }) => e.id === entitlementId);
+    expect(found.user?.mobileNumber).toBe(STUDENT_B_MOBILE);
 
     const revoke1 = await request(app)
       .delete(`/api/v1/admin/entitlements/${entitlementId}`)

@@ -192,6 +192,13 @@
   while starting Phase 13 (Admin Frontend); fixed by adding a flattened,
   deduped `permissions: string[]` field, resolved the same way
   `requirePermission()` already does but confined to this one endpoint.
+- `GET /admin/orders` and `GET /admin/entitlements` (and their `:id`
+  variants) never joined the `user` association, only a raw `userId` —
+  unusable for an admin UI browsing orders/entitlements across students.
+  Found while building Phase 13's admin order/entitlement screens; fixed
+  by adding `{ association: 'user' }` to both repositories' queries and
+  the missing `NonAttribute<User>` declarations on the `Order`/
+  `Entitlement` models.
 
 ### Security
 
