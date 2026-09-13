@@ -209,7 +209,10 @@ const questionRendererRegistry = {
 ```
 
 Rendering logic must be looked up via this registry, never hardcoded
-`if (question.type === 'MCQ_SINGLE')` branches spread through the UI. Not
-yet built (frontend work, Phase 12) — `GET /attempts/:id`'s response shape
-(`question.options[].text`, no correctness data) is what this registry will
-render against.
+`if (question.type === 'MCQ_SINGLE')` branches spread through the UI.
+`GET /attempts/:id`'s response shape (`question.questionType`,
+`question.options[].text`, no correctness data) is what this registry
+renders against — `questionType` was added to that response in Phase 12
+specifically so the frontend could key off it (it was missing before:
+`getAttemptDetail()` only ever eager-loaded `questionVersion`, never the
+parent `Question` row that actually holds `questionType`).

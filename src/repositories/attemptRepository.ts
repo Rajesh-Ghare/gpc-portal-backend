@@ -32,6 +32,7 @@ export async function findAttemptWithQuestions(id: string) {
         separate: true,
         order: [['sequenceNumber', 'ASC']],
         include: [
+          { association: 'question' },
           {
             association: 'questionVersion',
             include: [

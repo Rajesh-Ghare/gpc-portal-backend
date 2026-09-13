@@ -153,6 +153,7 @@ describe('Exam engine (attempts)', () => {
     expect(raw).not.toContain('isCorrect');
     expect(raw).not.toContain('correctOptionId');
     expect(attempt.questions[0].options[0].text).toBeTypeOf('string');
+    expect(attempt.questions[0].questionType).toBe('MCQ_SINGLE');
 
     const attemptQuestionId = attempt.questions[0].id;
 

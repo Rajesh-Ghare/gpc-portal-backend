@@ -143,6 +143,7 @@ export async function getAttemptDetail(attemptId: string, userId: string) {
       marks: aq.marks,
       negativeMarks: aq.negativeMarks,
       markedForReview: aq.markedForReview,
+      questionType: aq.question?.questionType ?? 'MCQ_SINGLE',
       questionText: translation?.questionText,
       options,
       answer: aq.answer

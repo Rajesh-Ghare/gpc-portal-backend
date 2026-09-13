@@ -169,6 +169,14 @@
   over 63 bytes, and Sequelize was mapping values onto the truncated
   (wrong) attribute names with no error thrown. Fixed with `separate: true`
   on the nested associations. See ADR-028.
+- `GET /attempts/:attemptId` never returned each question's `questionType`
+  — `getAttemptDetail()` eager-loaded `questionVersion` but never the
+  parent `Question` row that actually holds it, so the frontend's
+  documented question-renderer registry (`docs/EXAM_ENGINE.md`) had no way
+  to know which component to render. Found while starting Phase 12
+  (Student Frontend); fixed by eager-loading `question` alongside
+  `questionVersion` in `attemptRepository.findAttemptWithQuestions()` and
+  including `questionType` in the serialized response.
 
 ### Security
 

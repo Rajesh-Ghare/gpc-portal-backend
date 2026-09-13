@@ -116,8 +116,10 @@ POST /tests/:testId/attempts             → creates (or resumes an existing
 
 GET  /attempts/:attemptId                → status, remainingSeconds (computed,
                                             never trust a client clock), and
-                                            questions (no correctness data)
-                                            — auto-submits first if expired
+                                            questions[] (each with questionType,
+                                            for the frontend's renderer registry
+                                            — see EXAM_ENGINE.md; no correctness
+                                            data) — auto-submits first if expired
 
 PUT  /attempts/:attemptId/questions/:attemptQuestionId/answer
                                           { selectedOptionId?, answerText?, numericAnswer?, isMarkedForReview? }
