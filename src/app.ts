@@ -12,6 +12,7 @@ import { paymentRouter } from './api/v1/routes/payment.routes';
 import { studentRouter } from './api/v1/routes/student.routes';
 import { adminExamRouter } from './api/v1/routes/adminExam.routes';
 import { aiRouter } from './api/v1/routes/ai.routes';
+import { adminStudentRouter } from './api/v1/routes/adminStudent.routes';
 import { env } from './config/env';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { sendSuccess } from './utils/apiResponse';
@@ -43,6 +44,7 @@ export function createApp() {
   apiRouter.use('/admin', adminCommerceRouter);
   apiRouter.use('/admin', adminExamRouter);
   apiRouter.use('/admin', aiRouter);
+  apiRouter.use('/admin', adminStudentRouter);
   apiRouter.use('/', paymentRouter);
   apiRouter.use('/', studentRouter);
   app.use(env.apiBasePath, apiRouter);

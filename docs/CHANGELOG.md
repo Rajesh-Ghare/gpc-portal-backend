@@ -153,6 +153,11 @@
   `docs/DEVELOPMENT_STATUS.md` for this phase's full notes, including a
   real-browser end-to-end verification pass that caught and fixed one
   frontend bug (a broken "answered" counter).
+- `GET /admin/students?search=` (Phase 13, `student.view` — seeded since
+  Phase 1, activated now): a minimal read-only lookup (mobileNumber/
+  fullName, STUDENT role only, capped at 20 results) built specifically to
+  unblock the admin entitlement-grant UI, which previously had no way to
+  find a `userId` at all.
 
 ### Changed
 

@@ -430,6 +430,22 @@ DELETE /admin/entitlements/:id           requires entitlement.grant
                                           Audit-logged (action: entitlement.revoke)
 ```
 
+#### Student Lookup — Implemented (Phase 13)
+
+A minimal, read-only search — built specifically to unblock the admin
+entitlement-grant UI, which had no way to find a `userId` at all before
+this existed (`entitlement.grant`'s body only ever took a raw `userId`).
+Activates `student.view` (seeded since Phase 1, unused until now).
+
+```
+GET /admin/students?search=      requires student.view
+                                  → up to 20 users with the STUDENT role,
+                                  matching search against mobileNumber OR
+                                  fullName (case-insensitive substring);
+                                  omit search to list the most recent 20
+                                  → [{ id, mobileNumber, fullName, status }]
+```
+
 #### Attempts & Results (Admin View) — Implemented (Phase 8)
 
 Separate serializers from the student-facing attempt/result endpoints —

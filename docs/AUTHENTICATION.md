@@ -202,6 +202,14 @@ succeed — `requirePermission` server-side remains the actual enforcement,
 exactly as `docs/SECURITY.md` already states for the permissions list in
 general.
 
+**`student.view` activated in Phase 13** (also already seeded in Phase 1's
+baseline, unused until now — same "dormant code" pattern as `question.*`/
+`test.*`/`product.*`/`ai.generate` before it): `GET /admin/students?search=`
+is a minimal, read-only lookup scoped to users with the STUDENT role,
+matching against `mobileNumber`/`fullName`. Built specifically because the
+admin entitlement-grant UI had no way to find a `userId` at all — see
+`docs/API.md`'s Student Lookup section.
+
 ## Session Model
 
 `sessions` rows back server-side revocation (logout, admin-forced logout —
