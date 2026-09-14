@@ -181,11 +181,15 @@
   CHECK-constraint technical-debt item (a direct-model test bypassing the
   app-layer schema, asserting Postgres itself — SQLSTATE `23514` — rejects
   a mismatched target, not just Zod). 77 backend tests total, all passing.
-  A real frontend test runner (Vitest + React Testing Library, in the
-  companion `gpc-portal-frontend` repo) was also added this phase — see
-  `docs/TESTING.md` for the full account of both repos' testing status,
-  including the deliberate decision not to install a committed
-  end-to-end/browser suite (Playwright) this phase.
+  A real frontend test runner was also added this phase (Vitest + React
+  Testing Library + jsdom, in the companion `gpc-portal-frontend` repo) —
+  41 tests covering formatting/error-mapping utils, the permissions
+  helpers, the question-renderer registry, and three components
+  (`MCQSingle`, `QuestionNavigator`, `LoginPage`), including a regression
+  test locking in the "answered counter" bug Phase 12's browser testing
+  originally caught. Per the user's explicit choice, no committed
+  end-to-end/browser suite (Playwright) was installed this phase — see
+  `docs/TESTING.md` for the full reasoning and both repos' testing status.
 
 ### Changed
 

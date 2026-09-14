@@ -2,8 +2,7 @@
 
 ## Current Phase
 
-Phase 13 - Admin Frontend (complete, verified against the real backend API
-via typecheck/lint/build and real-browser end-to-end automation)
+Phase 14 - Testing (complete)
 
 ## Overall Progress
 
@@ -20,98 +19,108 @@ via typecheck/lint/build and real-browser end-to-end automation)
 - [x] AI
 - [x] Student frontend
 - [x] Admin frontend
-- [ ] Testing
+- [x] Testing
 - [ ] Deployment
 
 ## Current Work
 
-Phase 13 is complete and verified. Awaiting user confirmation before
-starting Phase 14 (Testing) — a dedicated pass across both repos: a real
-frontend test runner/harness (none exists yet; verification so far has
-been typecheck+lint+build+ad hoc browser automation), closing the
-remaining items in this repo's own `docs/KNOWN_ISSUES.md` Security Test
-Coverage checklist, and deciding whether to commit a real end-to-end
-browser-testing setup (Playwright/Cypress) given how much value the ad hoc
-CDP scripts have already provided across Phases 12–13.
+Phase 14 is complete. Awaiting user confirmation before starting Phase 15
+(Deployment) — the final phase per the spec's own order: containerizing
+both repos, environment/secrets configuration for a real deployment
+target, and a production readiness pass (the kind of thing
+`docs/DEPLOYMENT.md`, still Phase-1-era placeholder content, needs to
+become concrete).
 
-## Completed (Phase 13, this session)
+## Completed (Phase 14, this session)
 
-Code lives in the **`gpc-portal-frontend`** repo, plus several small
-backend enabling fixes in this repo (all found while building the
-frontend, each committed separately before the frontend commit that
-depended on it — see Important Files Changed).
+### Backend (`gpc-portal-backend`)
 
-- **Admin shell**: `AdminGuard` (role-gated: `ADMIN`/`SUPER_ADMIN` only,
-  redirects a `STUDENT` to `/tests`) and `AdminLayout` (a permission-gated
-  sidebar, distinct from the student `AppLayout`).
-- **`src/permissions/`**: `usePermission(code)`/`hasPermission(code)`/
-  `useIsAdmin()`, reading the new `permissions` field on the current user.
-  Used throughout to hide sidebar links, dashboard tiles, and action
-  buttons a user's permissions don't cover — still UX-only, every action
-  independently re-checked server-side.
-- **Catalog** (`src/features/admin/catalog/`): categories/exams/series in
-  one tabbed page — create, activate/deactivate, soft-delete.
-- **Subjects & Topics** (`src/features/admin/subjects/`): same pattern,
-  two sections on one page.
-- **Questions** (`src/features/admin/questions/`): list with subject/
-  review-status filters; a single-page MCQ_SINGLE authoring form (dynamic
-  option rows, radio-selected correct answer); a detail page showing the
-  latest version's content with correct-answer highlighting and approve/
-  reject actions.
-- **AI Generation** (`src/features/admin/ai/`): job list, a "generate"
-  form (subject + count), and a job detail page rendering each generated
-  item with approve/reject — approving creates and publishes a real
-  question through the same path question-bank authoring uses (per the
-  backend's ADR-033).
-- **Test Builder** (`src/features/admin/tests/`) — the most complex piece:
-  a minimal test-creation form, then a tabbed builder page (Sections /
-  Questions or Rules depending on `selectionMode`) with Validate/Publish/
-  Close/Archive actions, each gated by the relevant permission and by the
-  test's current status (structure edits only while `DRAFT`, matching
-  ADR-024).
-- **Results** (`src/features/admin/results/`): per-test results table with
-  a release action, and a per-student result detail with a per-question
-  answer-status breakdown.
-- **Commerce** (`src/features/admin/products/`, `.../orders/`): product
-  CRUD including nested price/item management (with a target-type picker
-  that switches between tests/exams/series/subjects depending on
-  `accessType`, mirroring the backend's own CHECK-constraint rule); a
-  read-only order browser.
-- **Entitlements** (`src/features/admin/entitlements/`): a grant form with
-  a live student-search picker (debounce-free, since results are typically
-  a handful of rows) and a test picker, plus a list with a revoke action.
-- **Attempts** (`src/features/admin/attempts/`): a read-only browser
-  rendering the full, unsanitized attempt detail (selected vs. correct
-  option, per ADR-030's admin-only exception) — deliberately built against
-  the raw nested `attemptQuestions[].questionVersion.options[]` shape the
-  admin endpoint returns, not the sanitized student-facing shape.
+Closed every remaining item this project had left open across
+`docs/SECURITY.md` and `docs/KNOWN_ISSUES.md`:
 
-### Backend enabling fixes (this repo, found while building the frontend)
+- **A student cannot view another student's result** — new assertion in
+  `tests/integration/results.test.ts` (`getResult`'s ownership check,
+  `errorCode FORBIDDEN`), previously only implied by the already-tested
+  attempt-ownership case.
+- **A client-forged `attemptLimit` in the attempt-creation request body has
+  no effect** — new assertion in `tests/integration/attempt.test.ts`:
+  grants an entitlement with `attemptLimit: 1`, sends `{ attemptLimit: 999
+  }` on both attempt-creation calls, the second is still rejected
+  `ATTEMPT_LIMIT_EXCEEDED`. (`createAttempt()`'s controller never reads
+  `req.body` at all — the test now proves that rather than just asserting
+  it from reading the code.)
+- **The `product_items_target_matches_access_type` CHECK constraint
+  (ADR-018) is verified at the database level**, not just via the
+  app-layer Zod schema in front of it — new assertion in
+  `tests/integration/commerce.test.ts` creates a `ProductItem` directly
+  (bypassing `createProductItemSchema` entirely) with a mismatched target
+  and asserts Postgres itself rejects it (`SequelizeDatabaseError`,
+  `parent.code === '23514'`, the real check_violation SQLSTATE).
+- `docs/SECURITY.md`'s Required Security Test Coverage checklist: every
+  item is now checked, each with its own dedicated test — none left as
+  "implied by a related one."
+- `docs/TESTING.md`: rewritten to document actual coverage per spec
+  section 47's categories, and to explicitly record *why* scoring/
+  selection/evaluation logic is tested via integration tests against a
+  real database rather than isolated unit tests with mocked Sequelize
+  models — consistent with this project's established preference (real
+  I/O over fakes, except for genuinely external providers like
+  OTP/payment/AI).
+- **77 backend tests total** (74 → 77; three new assertions, no new test
+  files), all passing.
 
-- `GET /auth/me` gained `permissions: string[]` — nothing to gate the
-  admin UI on before this.
-- `GET /admin/orders`/`GET /admin/entitlements` (+ `:id` variants) now
-  join `user` — previously only a raw `userId`, unusable for a browsing UI.
-- `GET /admin/students?search=` — a new minimal read-only lookup
-  (activates the long-dormant `student.view` permission), built because
-  there was no way at all to find a `userId` for the entitlement-grant form.
-- `GET /admin/results/:id` now joins `user` via a new, separate
-  `findResultByIdForAdmin()` — found by the real-browser verification pass
-  itself (the one bug this phase's browser testing actually caught, as
-  opposed to the others, which were identified as blockers before writing
-  the dependent UI).
+### Frontend (`gpc-portal-frontend`)
 
-### Verification
+A real test runner, added for the first time this phase (per the user's
+explicit choice — see Decisions below):
 
-Same discipline as Phase 12: `tsc -b`, `oxlint`, `vite build` (all clean),
-plus a real-browser CDP walkthrough against a live backend covering every
-admin module end-to-end — see `docs/FRONTEND.md`'s Manual/Automated
-Verification (Phase 13) section for the full list of what was exercised
-and the one bug it caught.
+- **Vitest + React Testing Library + `@testing-library/jest-dom`** (+
+  `@testing-library/user-event` for interaction tests), `jsdom`
+  environment, configured directly in `vite.config.ts` (imports
+  `defineConfig` from `vitest/config` rather than `vite`, so one config
+  file serves both the dev/build and the test runner — no separate
+  `vitest.config.ts` needed). `src/setupTests.ts` registers jest-dom's
+  matchers and RTL's `cleanup()` after every test (without this, DOM from
+  one test leaks into the next within the same file — found immediately
+  when the `QuestionNavigator` tests failed with "multiple elements
+  found" until this was added).
+- **41 tests across 8 files**, all passing:
+  - `src/utils/format.test.ts`, `src/utils/errorMessage.test.ts` — pure
+    unit tests for formatting/error-mapping logic.
+  - `src/features/attempt/utils.test.ts` — a **regression test locking in
+    the Phase 12 bug fix**: `isQuestionAnswered()` must return `false` for
+    a never-touched question (`answer: null`), the exact case the original
+    unguarded optional-chain comparison got wrong.
+  - `src/permissions/index.test.ts` — `hasPermission`/`usePermission`/
+    `useIsAdmin` against a real `authStore` (via `renderHook`), covering
+    both "has the permission" and "no current user at all."
+  - `src/questionTypes/index.test.tsx` — the renderer registry resolves
+    each of the six documented types to the right component and falls
+    back to `MCQSingle` for an unrecognized type.
+  - `src/questionTypes/MCQSingle.test.tsx`,
+    `src/features/attempt/components/QuestionNavigator.test.tsx`,
+    `src/features/auth/LoginPage.test.tsx` — component tests exercising
+    real rendering + `userEvent` interaction (click an option, click a
+    navigator cell, submit an invalid mobile number) rather than just
+    calling functions directly.
+- `package.json` gained a `test` script (`vitest run`).
+
+### Decisions made this phase
+
+- **User explicitly chose unit/component tests only, no committed
+  end-to-end/browser suite** (asked directly, since installing Playwright
+  is a real dependency/tooling decision with tradeoffs — browser binary
+  downloads, slower installs — that `docs/DEVELOPMENT_STATUS.md` had
+  flagged after Phase 13 as needing a deliberate choice rather than being
+  half-adopted). The ad hoc Chrome DevTools Protocol scripts used for
+  manual verification in Phases 12–13 remain exactly that: a documented,
+  repeatable-by-hand fallback method (`docs/FRONTEND.md`), not committed
+  anywhere. Revisit if/when this project actually needs CI-enforced
+  end-to-end coverage.
 
 ## In Progress
 
-Nothing — Phase 13 scope is complete.
+Nothing — Phase 14 scope is complete.
 
 ## Blocked
 
@@ -119,25 +128,23 @@ None.
 
 ## Known Issues
 
-No net-new known issues from this phase beyond what's noted inline above
-(the small backend gaps were fixed, not deferred). See
-`docs/KNOWN_ISSUES.md` for the running list; nothing there is specific to
-Phase 13.
+Two Technical Debt items closed this phase (the CHECK-constraint test gap
+and the security-test-coverage gap) — see `docs/KNOWN_ISSUES.md`, both
+entries removed rather than left stale. No new known issues from this
+phase.
 
 ## Next Recommended Task
 
-Phase 14: Testing. Per the spec's own phase order, this is a dedicated
-pass rather than "add tests as you go" (which every prior phase already
-did on the backend — 74 integration/unit tests exist there). Concretely:
-a real frontend test runner (Vitest + Testing Library is the natural
-choice given the backend already uses Vitest, or a browser-based tool like
-Playwright if end-to-end coverage is the priority); closing
-`docs/SECURITY.md`'s remaining unchecked Required Security Test Coverage
-boxes; and deciding whether any of this phase's ad hoc CDP verification
-scripts are worth turning into a committed, repeatable suite given how
-much real-bug-catching value they've provided across Phases 12–13 (they
-were NOT committed anywhere — this is a decision to make deliberately in
-Phase 14, not something to have half-adopted already).
+Phase 15: Deployment. Per the spec's own phase order, the final phase:
+containerizing both repos (a `Dockerfile` per repo, likely a
+`docker-compose.yml` at the top level for local multi-service orchestration
+including PostgreSQL), environment/secrets configuration for whatever
+target is chosen, and turning `docs/DEPLOYMENT.md` (still Phase-1-era
+placeholder content) into an accurate as-built deployment guide. This is
+also a natural point to revisit `docs/KNOWN_ISSUES.md`'s remaining
+lower-priority items (pagination, a real non-mock `PaymentGateway`, order
+cancellation) and decide which, if any, are worth addressing before a real
+deployment rather than after.
 
 ## Last Updated
 
@@ -145,49 +152,41 @@ Phase 14, not something to have half-adopted already).
 
 ## Last Development Session
 
-Implemented and verified Phase 13 (Admin Frontend) in the
-`gpc-portal-frontend` repo: the complete admin authoring/review/commerce
-surface — catalog, subjects/topics, question authoring + approval, AI
-generation + review, the full test builder (sections/questions/rules/
-lifecycle), results release, product/price/item management, read-only
-order and attempt browsing, and entitlement grant (via a new student
-search)/revoke. Four small, well-justified backend gaps were found and
-fixed along the way (permissions on `/auth/me`, `user` joins on admin
-orders/entitlements/results, and a new minimal student-search endpoint),
-each its own commit before the frontend work that depended on it. Verified
-via a real-browser walkthrough (Chrome DevTools Protocol, same method as
-Phase 12) exercising every admin module against a live backend, which
-caught one more backend bug (missing `user` join on the result-detail
-endpoint) — fixed and verified in the same session.
+Implemented and verified Phase 14 (Testing) across both repos. Backend:
+closed the last two `docs/SECURITY.md` checklist items and the
+`product_items` CHECK-constraint technical-debt item with three new
+integration-test assertions (77 tests total, all passing) — no new gaps
+found, this was purely closing out already-known, already-documented
+items. Frontend: added a real test runner for the first time (Vitest +
+React Testing Library, per the user's explicit choice not to add a
+committed end-to-end suite this phase), with 41 tests covering utils, the
+permissions helpers, the question-renderer registry, and three components
+— including a regression test that locks in the "answered" counter bug
+Phase 12's browser testing found and fixed, so it can't silently
+regress. `docs/TESTING.md` was rewritten to give an honest, complete
+account of both repos' testing status and the reasoning behind this
+project's testing choices (integration-over-mocked-unit for DB-coupled
+logic; unit/component-over-E2E for the frontend, for now).
 
 ## Important Files Changed
 
-**`gpc-portal-backend`** (this repo, four separate small commits before
-the frontend work, per the CHANGELOG's own entries):
-- `src/controllers/authController.ts` (`permissions` field on `/auth/me`)
-- `src/repositories/{orderRepository.ts,entitlementRepository.ts}`,
-  `src/models/{Order.ts,Entitlement.ts}` (`user` joins)
-- `src/repositories/userRepository.ts`, `src/services/studentService.ts`,
-  `src/controllers/studentAdminController.ts`,
-  `src/api/v1/routes/adminStudent.routes.ts` (new student search endpoint)
-- `src/repositories/resultRepository.ts`, `src/services/resultService.ts`
-  (`findResultByIdForAdmin()`)
-- `tests/integration/{auth.test.ts,commerce.test.ts,adminStudents.test.ts,
-  results.test.ts}` (new/updated assertions for all of the above)
-- `docs/API.md`, `docs/AUTHENTICATION.md`, `docs/CHANGELOG.md`,
-  `docs/FRONTEND.md` (rewritten for the as-built admin frontend),
+**`gpc-portal-backend`** (this repo):
+- `tests/integration/{attempt.test.ts,results.test.ts,commerce.test.ts}`
+  (three new assertions)
+- `docs/SECURITY.md` (checklist fully checked), `docs/KNOWN_ISSUES.md`
+  (two items closed), `docs/TESTING.md` (rewritten), `docs/CHANGELOG.md`,
   `docs/DEVELOPMENT_STATUS.md` (this file)
 
 **`gpc-portal-frontend`** (companion repo):
-- `src/permissions/index.ts`, `src/app/{AdminGuard.tsx,AdminLayout.tsx}`
-  (foundation)
-- `src/features/admin/{AdminDashboardPage.tsx,catalog/,subjects/,
-  questions/,ai/,tests/,results/,products/,orders/,entitlements/,
-  attempts/}` (every admin module)
-- `src/app/router.tsx`, `src/app/AppLayout.tsx` (admin routes wired in)
-- `src/stores/authStore.ts`, `src/features/auth/{hooks.ts,VerifyOtpPage.tsx}`
-  (`permissions` field, role-based post-login redirect)
-- `src/index.css` (admin shell/table/form/tabs styles)
+- `vite.config.ts` (test config added), `src/setupTests.ts` (created),
+  `package.json` (`test` script + new devDependencies)
+- `src/utils/{format.test.ts,errorMessage.test.ts}`,
+  `src/features/attempt/utils.test.ts`, `src/permissions/index.test.ts`,
+  `src/questionTypes/index.test.tsx`,
+  `src/questionTypes/MCQSingle.test.tsx`,
+  `src/features/attempt/components/QuestionNavigator.test.tsx`,
+  `src/features/auth/LoginPage.test.tsx` (all created)
+- `README.md` (test script documented, status updated)
 
 ## Database Changes
 
@@ -195,40 +194,30 @@ None.
 
 ## API Changes
 
-New: `GET /admin/students?search=`. Extended: `GET /auth/me` (+
-`permissions`), `GET /admin/orders`/`:id`, `GET /admin/entitlements`/`:id`
-(+ `user`), `GET /admin/results/:id` (+ `user`). See `docs/API.md`.
+None — this phase added test coverage for existing behavior only.
 
 ## Testing Status
 
-Backend: 74 tests (3 new: 2 in `adminStudents.test.ts`, 1 assertion added
-to `auth.test.ts` and `commerce.test.ts` and `results.test.ts` each — see
-this repo's own test files for exact counts). Frontend: still no test
-runner (Phase 14, as planned); this phase's verification was typecheck +
-lint + build + a comprehensive real-browser walkthrough, detailed above
-and in `docs/FRONTEND.md`.
+- Backend: 77 tests across 12 files (2 unit, 10 integration), all passing
+  against a real PostgreSQL database.
+- Frontend: 41 tests across 8 files, all passing (Vitest + jsdom + React
+  Testing Library). No end-to-end suite (deliberate — see Decisions above).
 
 ## Handover Notes
 
-- **Every "found while building the frontend" backend fix this phase
-  followed the same rule Phase 12 established**: small, additive,
-  well-justified by a concrete UI need, its own commit, its own test
-  assertion, never bundled silently into the frontend commit. Keep doing
-  this — it's cheap insurance against the docs and the code drifting apart.
-- **`findResultByIdForAdmin()` exists specifically so the shared
-  `findResultById()`/`getResultOrThrow()` (student-facing) never gains an
-  admin-only join.** This is the same ADR-030 discipline as
-  `attemptAdminService.ts` vs `attemptService.ts` — don't collapse them
-  back together for convenience.
-- **The admin frontend's permission checks (`usePermission`) are read from
-  `GET /auth/me`'s `permissions` array, cached in `authStore` at login
-  time.** If a user's permissions change server-side mid-session (a role
-  edit), the frontend won't see it until they log out/in again — there's
-  no live-refresh of this list. Acceptable for now (permission changes are
-  rare, admin-initiated events); revisit only if that assumption breaks.
-- **No admin UI exists yet for role/permission management itself** — roles
-  and permissions are still seeded/assigned only via migrations/seeders or
-  direct DB access. Not attempted this phase; would need its own small
-  backend module first (no such endpoints exist).
+- **`src/setupTests.ts`'s `afterEach(cleanup)` is load-bearing** — remove
+  it and component tests within the same file will see leftover DOM from
+  previous tests (this happened immediately when writing
+  `QuestionNavigator.test.tsx`, surfacing as spurious "multiple elements
+  found" errors that had nothing to do with the component itself).
+- **`vite.config.ts` imports `defineConfig` from `'vitest/config'`, not
+  `'vite'`** — this is what makes the `test` field type-check; changing
+  the import back to `'vite'` would silently lose type-checking on the
+  test config (it would likely still work at runtime, but should not be
+  "fixed" without understanding why it's this way).
+- **The end-to-end/Playwright decision was deliberately deferred, not
+  forgotten.** If a future phase decides to add it, `docs/TESTING.md` and
+  this file both explain the reasoning that led to deferring it here —
+  read that before silently introducing a new E2E tool.
 - Read `CLAUDE.md` and this file first in any new session before writing
   code.
