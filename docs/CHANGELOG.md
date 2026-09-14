@@ -174,6 +174,18 @@
   (permissions on `/auth/me`, `user` joins on admin orders/entitlements/
   results, and the new student-search endpoint above) and one more caught
   by the real-browser verification pass itself (the results `user` join).
+- Testing (Phase 14): closed both remaining `docs/SECURITY.md` checklist
+  items (a student cannot view another student's result; a client-forged
+  `attemptLimit` in the attempt-creation body has no effect — the
+  controller never reads `req.body` at all) and the `product_items`
+  CHECK-constraint technical-debt item (a direct-model test bypassing the
+  app-layer schema, asserting Postgres itself — SQLSTATE `23514` — rejects
+  a mismatched target, not just Zod). 77 backend tests total, all passing.
+  A real frontend test runner (Vitest + React Testing Library, in the
+  companion `gpc-portal-frontend` repo) was also added this phase — see
+  `docs/TESTING.md` for the full account of both repos' testing status,
+  including the deliberate decision not to install a committed
+  end-to-end/browser suite (Playwright) this phase.
 
 ### Changed
 

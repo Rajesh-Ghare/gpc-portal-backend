@@ -212,6 +212,14 @@ describe('Results (rank/percentile + release workflow)', () => {
     expect(res.body.data.scoredMarks).toBe('10.00');
   });
 
+  it("blocks a student from viewing another student's result", async () => {
+    const res = await request(app)
+      .get(`/api/v1/attempts/${attemptIds[0]}/result`)
+      .set('Authorization', `Bearer ${students[1]!.token}`);
+    expect(res.status).toBe(403);
+    expect(res.body.errorCode).toBe('FORBIDDEN');
+  });
+
   it("admin attempt view exposes correctness data (unlike the student's own view)", async () => {
     const res = await request(app)
       .get(`/api/v1/admin/attempts/${attemptIds[0]}`)

@@ -14,19 +14,6 @@
 
 ## Technical Debt
 
-- **The `product_items` DB-level CHECK constraint still has no automated
-  test against the raw model** (only the app-layer duplicate of the same
-  rule, in `createProductItemSchema`, is test-covered —
-  `tests/integration/commerce.test.ts`). Phase 7 added a direct test of the
-  `attempts` partial unique index (`tests/integration/attempt.test.ts` —
-  inserts two `IN_PROGRESS` rows for the same user/test via the model
-  directly, asserts Postgres rejects the second with
-  `SequelizeUniqueConstraintError`/code `23505`); the
-  `product_items_target_matches_access_type` CHECK constraint (ADR-018)
-  itself is still only verified manually (Phase 2's session notes) plus
-  indirectly via the schema validation Phase 9 added in front of it. Add a
-  test that bypasses the schema and inserts directly via `ProductItem.create`
-  with a mismatched target, asserting Postgres — not Zod — rejects it.
 - **Session duration is a hardcoded constant**, not configurable via
   environment variable (`SESSION_DURATION_MS = 30 days` in
   `src/services/authService.ts`). Fine for now; revisit if a product
@@ -124,11 +111,3 @@
   items.** Each item is reviewed one at a time via its own approve/reject
   call. Fine at V1 scale; add bulk actions if reviewing many generated
   items one-by-one becomes a real workflow complaint.
-- **Security test coverage has some unchecked boxes** — see
-  `docs/SECURITY.md`'s "Required Security Test Coverage" list. Remaining
-  items are implied-but-not-separately-asserted (e.g. "student cannot
-  access another student's *result*" is covered by the same ownership check
-  as attempts, but has no dedicated test) rather than not-yet-applicable —
-  the pricing item was closed out in Phase 9. Close the rest out as the
-  relevant phase makes them concrete, not by writing tests against
-  not-yet-real features.

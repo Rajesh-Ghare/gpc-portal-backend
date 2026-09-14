@@ -102,6 +102,19 @@ describe('Commerce (products, prices, items, orders, entitlement list/revoke)', 
     expect(res.body.errorCode).toBe('VALIDATION_ERROR');
   });
 
+  it('enforces the product_items_target_matches_access_type CHECK constraint at the database level, bypassing the app-layer schema', async () => {
+    let caught: unknown;
+    try {
+      // Direct model create — skips createProductItemSchema's superRefine entirely,
+      // so only the DB constraint (ADR-018) can catch this mismatch.
+      await ProductItem.create({ productId, accessType: 'SUBSCRIPTION', testId: '00000000-0000-0000-0000-000000000000' });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect((caught as { parent?: { code?: string } }).parent?.code).toBe('23514');
+  });
+
   it('creates a valid SUBSCRIPTION product_item (no target columns)', async () => {
     const res = await request(app)
       .post(`/api/v1/admin/products/${productId}/items`)

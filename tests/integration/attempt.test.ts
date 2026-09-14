@@ -245,6 +245,33 @@ describe('Exam engine (attempts)', () => {
     expect(second.body.errorCode).toBe('ATTEMPT_LIMIT_EXCEEDED');
   });
 
+  it('ignores a client-supplied attemptLimit in the request body — only the entitlement\'s own limit governs', async () => {
+    const { questionId } = await createApprovedQuestion(adminToken, subjectId);
+    const testId = await createPublishedManualTest(adminToken, examId, questionId);
+
+    const grantRes = await request(app)
+      .post('/api/v1/admin/entitlements')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ userId: studentAId, testId, attemptLimit: 1 })
+      .expect((res) => expect([200, 201]).toContain(res.status));
+    expect(grantRes.body.data.attemptLimit).toBe(1);
+
+    const first = await request(app)
+      .post(`/api/v1/tests/${testId}/attempts`)
+      .set('Authorization', `Bearer ${studentAToken}`)
+      .send({ attemptLimit: 999 })
+      .expect(201);
+    await request(app).post(`/api/v1/attempts/${first.body.data.id}/submit`).set('Authorization', `Bearer ${studentAToken}`).expect(200);
+
+    // A forged higher attemptLimit in the body must not raise the real, server-tracked limit.
+    const second = await request(app)
+      .post(`/api/v1/tests/${testId}/attempts`)
+      .set('Authorization', `Bearer ${studentAToken}`)
+      .send({ attemptLimit: 999 });
+    expect(second.status).toBe(403);
+    expect(second.body.errorCode).toBe('ATTEMPT_LIMIT_EXCEEDED');
+  });
+
   it('enforces the partial unique index preventing two IN_PROGRESS attempts for the same user/test at the database level', async () => {
     const { questionId } = await createApprovedQuestion(adminToken, subjectId);
     const testId = await createPublishedManualTest(adminToken, examId, questionId);

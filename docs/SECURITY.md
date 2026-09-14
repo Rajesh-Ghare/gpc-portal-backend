@@ -92,9 +92,9 @@ own?").
 - [x] **A student cannot access another student's attempt** — verified,
       `tests/integration/attempt.test.ts` (`ensureOwnsAttempt`,
       `errorCode FORBIDDEN`).
-- [ ] A student cannot access another student's result (implied by the
-      above via `getResult`'s ownership check, but not separately asserted
-      in a test yet).
+- [x] **A student cannot access another student's result** — verified,
+      `tests/integration/results.test.ts` (`ensureOwnsAttempt` via
+      `getResult`, `errorCode FORBIDDEN`).
 - [x] **A student cannot access another student's order** — verified,
       `tests/integration/commerce.test.ts` (`orderPolicy.ensureOwnsOrder`,
       `errorCode FORBIDDEN`).
@@ -115,10 +115,12 @@ own?").
 - [x] **The frontend cannot bypass entitlement checks to start an
       attempt** — verified, `ENTITLEMENT_NOT_FOUND` returned with no
       entitlement present.
-- [ ] The frontend cannot increase its own attempt limit — `attemptLimit`
-      lives only on `entitlements` (admin-set) and is never accepted from
-      the attempt-creation request body, but there's no dedicated test
-      asserting a forged field is ignored.
+- [x] **The frontend cannot increase its own attempt limit** —
+      `attemptLimit` lives only on `entitlements` (admin-set);
+      `createAttempt()`'s controller never reads `req.body` at all.
+      Verified, `tests/integration/attempt.test.ts` (grants `attemptLimit:
+      1`, sends a forged `{ attemptLimit: 999 }` on both attempt-creation
+      calls, second is still rejected `ATTEMPT_LIMIT_EXCEEDED`).
 - [x] **A student cannot call admin-only APIs** — verified across Phases
       4–8 (`FORBIDDEN` from `requirePermission`), including the new Phase 8
       admin attempt/result/release endpoints.
@@ -145,8 +147,11 @@ own?").
       no `questions` row until `POST .../approve` is called; a rejected
       item never creates one at all (`tests/integration/ai.test.ts`).
 
-Unchecked items above are implied-but-not-separately-asserted — add
-explicit tests for them as the relevant phase makes them concrete.
+**All items on this checklist are now verified with a dedicated test as of
+Phase 14** — the last two (student-result ownership, forged attempt-limit)
+were closed out in that phase. Add new items here as new security-relevant
+behavior is built, and close each one with its own explicit test rather
+than leaving it "implied by a related test."
 
 ## Auditability
 
