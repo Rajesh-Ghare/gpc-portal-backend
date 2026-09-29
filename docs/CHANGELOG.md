@@ -243,6 +243,12 @@
   the student-facing `getResult()` also uses, per ADR-030's "admin views
   are separate functions" discipline. Found via real-browser end-to-end
   verification of the admin results page, not by typechecking.
+- Backend failed to start on Windows: `npm run dev` printed only the
+  `tsx watch` banner and never listened. The `argon2@0.45.1` prebuilt
+  `win32-x64` binary segfaults on load (reproduced on Node 20.20 and 22.6,
+  Intel i5-7300U), and `tsx watch` swallows the crash silently. Pinned
+  `argon2` to exactly `0.44.0`, whose prebuild loads and hashes correctly.
+  See `docs/KNOWN_ISSUES.md`.
 
 ### Security
 

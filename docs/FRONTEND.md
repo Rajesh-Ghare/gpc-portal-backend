@@ -7,6 +7,16 @@ React + Vite + TypeScript, React Router, TanStack Query (server state), Zustand
 hand-written CSS (`src/index.css`) with light/dark CSS-variable tokens; no new
 dependency was justified for this phase's scope.
 
+**Visual design system.** `src/index.css` opens with the full token set
+(slate neutrals, indigo brand, semantic success/warning/danger/info, radii,
+elevation, focus ring) — change the palette there, not in components. Type is
+Inter (Google Fonts, loaded in `index.html`, with a system-font fallback).
+Icons come from `src/components/Icon.tsx`, a small inline-SVG set (no icon
+library); add a glyph there rather than pulling in a package. The admin
+sidebar and dashboard both render from `src/app/adminNav.ts`, so a new admin
+section is added in one place. Login/OTP share `features/auth/AuthLayout.tsx`
+(split-screen, brand panel hidden below 900px).
+
 ## Directory Structure
 
 See `ARCHITECTURE.md`. Key rule: if data comes from the API, it lives in

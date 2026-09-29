@@ -10,7 +10,13 @@
 
 ## Low
 
-(none)
+- **`argon2` is pinned to exactly `0.44.0`** (no `^`) in `package.json`.
+  The `0.45.1` prebuilt `win32-x64` binary segfaults the moment it is
+  `require`d (confirmed on Node 20.20 and 22.6, Intel i5-7300U), which
+  kills the server before it logs anything — `tsx watch` hides the crash
+  and just sits idle. Before bumping `argon2`, verify on Windows with
+  `node -e "require('argon2').hash('x').then(()=>console.log('ok'))"`.
+  Unpin once a later release's Windows prebuild loads cleanly.
 
 ## Technical Debt
 
