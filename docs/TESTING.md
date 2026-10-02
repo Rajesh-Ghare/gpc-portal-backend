@@ -50,7 +50,8 @@ explicit assertion (none are "implied by a related test" anymore).
 
 ## Status
 
-107 backend tests across 15 files (4 unit, 11 integration), all passing
+132 backend tests across 17 files (5 unit, 12 integration — Razorpay is
+covered with a stubbed API client, never the real network), all passing
 against a real PostgreSQL database — see `docs/DEVELOPMENT_STATUS.md`'s
 per-phase Testing Status sections for how this grew. The full database
 schema (Phase 2) was verified manually against a real PostgreSQL database

@@ -1,5 +1,44 @@
 import { describe, expect, it } from 'vitest';
-import { assertNoMockProvidersInProduction, parseNonNegativeInt, parseTrustProxy } from '../../src/config/env';
+import {
+  assertNoMockProvidersInProduction,
+  assertPaymentProviderConfig,
+  parseNonNegativeInt,
+  parseTrustProxy,
+} from '../../src/config/env';
+
+describe('assertPaymentProviderConfig', () => {
+  const keys = { keyId: 'rzp_live_x', keySecret: 'secret', webhookSecret: 'whsec' };
+
+  it('ignores Razorpay settings when another provider is selected', () => {
+    expect(() =>
+      assertPaymentProviderConfig({
+        nodeEnv: 'production',
+        paymentProvider: 'mock',
+        razorpay: { keyId: '', keySecret: '', webhookSecret: null },
+      }),
+    ).not.toThrow();
+  });
+
+  it('requires the key id and secret for Razorpay', () => {
+    expect(() =>
+      assertPaymentProviderConfig({
+        nodeEnv: 'development',
+        paymentProvider: 'razorpay',
+        razorpay: { keyId: '', keySecret: '', webhookSecret: null },
+      }),
+    ).toThrow(/RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET/);
+  });
+
+  it('requires the webhook secret only in production', () => {
+    const withoutWebhook = { ...keys, webhookSecret: null };
+    expect(() =>
+      assertPaymentProviderConfig({ nodeEnv: 'development', paymentProvider: 'razorpay', razorpay: withoutWebhook }),
+    ).not.toThrow();
+    expect(() =>
+      assertPaymentProviderConfig({ nodeEnv: 'production', paymentProvider: 'razorpay', razorpay: withoutWebhook }),
+    ).toThrow(/RAZORPAY_WEBHOOK_SECRET/);
+  });
+});
 
 describe('parseTrustProxy', () => {
   it('defaults to not trusting any proxy', () => {

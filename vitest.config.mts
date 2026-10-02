@@ -12,6 +12,10 @@ export default defineConfig({
       OTP_MAX_SENDS_PER_NUMBER_PER_HOUR: '0',
       OTP_MAX_SENDS_PER_IP_PER_HOUR: '0',
       OTP_MAX_VERIFY_ATTEMPTS_PER_NUMBER_PER_HOUR: '0',
+      // A developer's .env may select Razorpay for manual testing; the suite
+      // must never call it. tests/integration/razorpay.test.ts opts in with
+      // fake keys and a stubbed API client.
+      PAYMENT_PROVIDER: 'mock',
     },
     // Never collect compiled copies of the tests if `tsc` ever emits into dist/.
     exclude: ['**/node_modules/**', 'dist/**'],

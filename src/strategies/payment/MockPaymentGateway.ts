@@ -1,6 +1,11 @@
 import { createHmac, randomUUID } from 'crypto';
 import type { Order } from '../../models';
-import type { PaymentCreateResult, PaymentGateway, WebhookVerificationResult } from './PaymentGateway';
+import type {
+  PaymentCreateResult,
+  PaymentGateway,
+  WebhookRequest,
+  WebhookVerificationResult,
+} from './PaymentGateway';
 
 export interface MockWebhookPayload {
   eventId: string;
@@ -20,7 +25,13 @@ export interface MockWebhookPayload {
  * docs/COMMERCE_AND_PAYMENTS.md's Payment Flow section.
  */
 export class MockPaymentGateway implements PaymentGateway {
+  readonly name = 'mock';
   private readonly secret = 'mock-payment-webhook-secret';
+
+  /** No browser checkout — the frontend shows "simulate" buttons instead. */
+  checkoutOptions(): null {
+    return null;
+  }
 
   async createPayment(order: Order): Promise<PaymentCreateResult> {
     return {
@@ -40,9 +51,13 @@ export class MockPaymentGateway implements PaymentGateway {
     return createHmac('sha256', this.secret).update(JSON.stringify(body)).digest('hex');
   }
 
-  verifyWebhook(rawBody: unknown, signature: string | undefined): WebhookVerificationResult {
+  verifyWebhook(request: WebhookRequest): WebhookVerificationResult {
+    const rawBody = request.body;
+    const signatureHeader = request.headers['x-mock-signature'];
+    const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
     const invalid: WebhookVerificationResult = {
       valid: false,
+      relevant: false,
       eventId: '',
       eventType: '',
       providerOrderId: '',
@@ -63,6 +78,7 @@ export class MockPaymentGateway implements PaymentGateway {
 
     return {
       valid: true,
+      relevant: true,
       eventId: body.eventId,
       eventType: body.eventType,
       providerOrderId: body.providerOrderId,

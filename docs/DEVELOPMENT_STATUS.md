@@ -173,8 +173,11 @@ priority order:
    provider's free CA bundle, or temporarily `DB_SSL_ALLOW_UNVERIFIED=true`
    (logs a warning). No purchased certificate is needed for this.
 
-**Only item 2 remains**, and it needs product decisions (which payment and
-SMS providers) before it can be built.
+**Item 2 — payments done (Razorpay, ADR-039); SMS/OTP provider remains**
+and needs a provider decision plus DLT registration. Manual Razorpay step
+before production: create the webhook in the Dashboard and set
+`RAZORPAY_WEBHOOK_SECRET` (see `docs/COMMERCE_AND_PAYMENTS.md` →
+Razorpay setup).
 
 ## Last Updated
 

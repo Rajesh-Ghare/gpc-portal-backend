@@ -56,7 +56,8 @@ PRODUCT_NOT_FOUND
 
 ORDER_NOT_FOUND, ORDER_ALREADY_PAID, IDEMPOTENCY_CONFLICT
 
-PAYMENT_NOT_FOUND, PAYMENT_VERIFICATION_FAILED, PAYMENT_WEBHOOK_INVALID
+PAYMENT_NOT_FOUND, PAYMENT_VERIFICATION_FAILED, PAYMENT_WEBHOOK_INVALID,
+PAYMENT_PROVIDER_ERROR
 
 ENTITLEMENT_NOT_FOUND, ENTITLEMENT_EXPIRED
 
@@ -185,7 +186,26 @@ GET  /orders/:orderId                    → a single order (must be the request
 POST /payments/create                    { orderId }
                                           → creates (or returns the existing PENDING)
                                             payment via the configured PaymentGateway
+                                          → payment row + checkout: { keyId, orderId,
+                                              amount (paise), currency } for Razorpay,
+                                              null for mock
                                           errorCode ORDER_ALREADY_PAID / ORDER_NOT_FOUND / FORBIDDEN
+                                          errorCode VALIDATION_ERROR (422) — total below ₹1.00
+                                          errorCode PAYMENT_PROVIDER_ERROR (502) — Razorpay
+                                            unreachable or rejected our credentials
+POST /payments/verify                    { providerOrderId, providerPaymentId, signature }
+                                          (Razorpay Checkout's razorpay_order_id /
+                                          razorpay_payment_id / razorpay_signature)
+                                          Verifies the signature, re-fetches the payment
+                                          from Razorpay (captures if authorized), then
+                                          marks PAID + grants access (ADR-039).
+                                          → same shape as the webhook response below
+                                          errorCode PAYMENT_VERIFICATION_FAILED (400) — bad
+                                            signature, wrong order, or not captured
+                                          errorCode VALIDATION_ERROR (422) — missing fields
+                                          errorCode FORBIDDEN / PAYMENT_NOT_FOUND /
+                                            PAYMENT_PROVIDER_ERROR (502)
+                                          errorCode NOT_FOUND — provider has no checkout (mock)
 POST /payments/webhook                   NO session auth — the caller is the payment
                                           provider, authenticated by signature, not a
                                           token. See docs/COMMERCE_AND_PAYMENTS.md for

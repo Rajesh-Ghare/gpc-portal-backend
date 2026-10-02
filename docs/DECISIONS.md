@@ -1334,3 +1334,54 @@ Consequences:
 - Existing deployments that set `DB_SSL=true` and relied on the implicit
   skip will fail to connect until they set `DB_SSL_CA_PATH` (or,
   temporarily, `DB_SSL_ALLOW_UNVERIFIED=true`). Deliberate: fail closed.
+
+---
+
+## ADR-039: Razorpay Standard Checkout, With Server-Verified Checkout as a Second Confirmation Path
+
+Date: 2026-10-02
+Status: Accepted — amends the payment rule in CLAUDE.md / SECURITY.md
+("entitlements only after a verified webhook")
+
+Decision:
+`RazorpayPaymentGateway` implements `PaymentGateway`. Purchases use
+Razorpay Standard Checkout: `POST /payments/create` creates a Razorpay
+order and returns public checkout options; the browser opens Checkout;
+on success it posts `razorpay_order_id`/`payment_id`/`signature` to
+`POST /payments/verify`. The server (1) verifies
+`HMAC-SHA256(order_id|payment_id, KEY_SECRET)` in constant time, (2)
+fetches the payment from Razorpay's API and checks it belongs to that
+order, (3) captures it if only authorized, and only if it is `captured`
+(4) applies it through the same transactional path as a webhook
+(ADR-036). The `payment.captured`/`payment.failed` webhook, verified over
+the raw request bytes with a separate webhook secret, remains as the
+backup path. The amended rule: **entitlements are created only after the
+server authenticates the payment with the provider — via a verified
+webhook, or a verified checkout signature plus a server-to-server fetch.
+Never on the browser's word alone.**
+
+Reason:
+Webhook-only confirmation means the student pays and then waits (and
+locally, Razorpay can't reach `localhost` at all). The checkout signature
+can't be forged without the key secret, and the server-to-server fetch
+confirms the money was actually captured for this exact order — so the
+frontend remains non-authoritative. This is Razorpay's documented flow.
+
+Alternatives:
+Webhook-only with frontend polling — rejected: slower UX, untestable
+locally without a tunnel, and no more secure. Trusting the checkout
+signature without fetching the payment — rejected: the signature proves
+Razorpay produced the payment id, not that it is captured (it can still be
+merely authorized and later auto-refunded).
+
+Consequences:
+- Both paths can arrive for one payment; the second is a no-op (distinct
+  event ids `checkout:<payment_id>` vs Razorpay's event id; order already
+  PAID; entitlements idempotent per item).
+- Provider errors map to 502 `PAYMENT_PROVIDER_ERROR`, never 401.
+- The key id reaches the browser in the create-payment response (it's
+  public), not via a `VITE_` build variable — test/live key changes need
+  no frontend rebuild.
+- `express.json()` keeps `req.rawBody` for webhook signature checks.
+- Refunds are manual in the Razorpay Dashboard and not yet reflected back
+  (see `docs/KNOWN_ISSUES.md`).

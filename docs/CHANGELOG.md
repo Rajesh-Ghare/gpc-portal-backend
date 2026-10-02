@@ -4,6 +4,15 @@
 
 ### Added
 
+- Razorpay Standard Checkout (ADR-039): `RazorpayPaymentGateway`
+  (`PAYMENT_PROVIDER=razorpay`), `POST /payments/verify` (signature +
+  server-to-server payment fetch + capture), Razorpay webhooks verified over
+  the raw request body, `checkout` options in the create-payment response,
+  new error code `PAYMENT_PROVIDER_ERROR` (502). Env: `RAZORPAY_KEY_ID`,
+  `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` (validated at startup).
+  Frontend: "Pay ₹X" opens Razorpay Checkout; handles success (verify),
+  modal dismiss and `payment.failed`. Dependency: `razorpay`.
+
 - Initial repository structure: `backend/` (Node.js + Express + TypeScript +
   Sequelize) and `frontend/` (React + Vite + TypeScript).
 - Full `docs/` documentation system and root `CLAUDE.md`.

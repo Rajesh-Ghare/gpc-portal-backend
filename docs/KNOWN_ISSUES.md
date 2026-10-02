@@ -2,14 +2,12 @@
 
 ## High
 
-- **No real (non-mock) `PaymentGateway` or `OtpProvider` implementation
-  exists yet — production cannot start without them** (ADR-034: the server
-  refuses to start with `NODE_ENV=production` and either provider set to
-  `mock`). Must be built before Phase 15 can ship. A real payment provider
-  (Razorpay/Stripe/etc.) needs its own class behind the same interface plus
-  real webhook signature verification per that provider's documented scheme
-  (see the raw-body-vs-parsed-body note under Technical Debt); a real OTP
-  provider needs an SMS integration behind `OtpProvider`.
+- **No real (non-mock) `OtpProvider` implementation exists yet —
+  production cannot start without one** (ADR-034: the server refuses to
+  start with `NODE_ENV=production` and `OTP_PROVIDER=mock`). Needs an SMS
+  integration (MSG91/Twilio/etc.) behind `OtpProvider`; Indian SMS also
+  needs DLT template registration, which takes days — start early. (The
+  payment side is done: Razorpay, ADR-039.)
 
 ## Medium
 
@@ -66,12 +64,15 @@
   current data volumes; add pagination as a cross-cutting pass once any
   list endpoint's result set could realistically grow unbounded.
 - **The mock payment gateway signs the parsed JSON body, not raw request
-  bytes.** Adequate for local dev/tests (there's no real network hop to
-  introduce re-serialization drift), but a real provider integration
-  typically requires verifying an HMAC over the exact raw bytes received,
-  since JSON.stringify-ing a parsed body is not guaranteed to reproduce the
-  original wire bytes. Don't copy the mock gateway's approach when building
-  a real one — see ADR-032's Consequences.
+  bytes.** Adequate for local dev/tests only. The Razorpay gateway does it
+  properly (HMAC over `req.rawBody`, kept by `express.json()`'s `verify`
+  hook); any future provider must do the same — see ADR-032's
+  Consequences.
+- **No refunds or Razorpay order expiry.** Refunds are done manually in
+  the Razorpay Dashboard and aren't reflected back (no `payment.refunded`
+  handling, entitlements aren't revoked automatically). Abandoned
+  checkouts leave the Razorpay order `created` and our order `PENDING`
+  (same as the existing order-cancellation gap below).
 - **No `GET /entitlements` student-facing "my entitlements" view.** A
   student can infer purchase success from `GET /orders/:id`'s `status`
   field, but there's no endpoint listing what they currently have access

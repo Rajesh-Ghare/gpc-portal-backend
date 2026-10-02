@@ -63,8 +63,9 @@ the student-facing flow; `GET /admin/orders`/`GET /admin/orders/:orderId`
 
 ```
 PaymentGateway (interface)                    src/strategies/payment/PaymentGateway.ts
-  ├── MockPaymentGateway   (development)       src/strategies/payment/MockPaymentGateway.ts
-  └── <RealProvider>PaymentGateway (future — Razorpay/Stripe/etc.)
+  ├── MockPaymentGateway     (dev/tests)       src/strategies/payment/MockPaymentGateway.ts
+  └── RazorpayPaymentGateway (PAYMENT_PROVIDER=razorpay, ADR-039)
+                                               src/strategies/payment/RazorpayPaymentGateway.ts
 ```
 
 No provider-specific logic outside the concrete gateway implementation —
@@ -74,20 +75,39 @@ factory is the only place that knows the `PAYMENT_PROVIDER` env value.
 
 ```
 POST /payments/create { orderId }
-  → 404s ORDER_ALREADY_PAID if the order is already PAID; returns the
-    existing PENDING payment if one already exists for this order
-    (idempotent — never creates two provider-side payment intents)
+  → 409 ORDER_ALREADY_PAID if the order is already PAID; returns the
+    existing PENDING payment if one already exists for this order with the
+    current provider (idempotent — never creates two provider-side orders)
   → PaymentGateway.createPayment(order) → payments row (PENDING) + provider
-    reference (providerOrderId) returned to client
+    reference (providerOrderId), plus `checkout` = the gateway's public
+    browser-checkout options (Razorpay: keyId, orderId, amount in paise,
+    currency; null for mock) — never a secret
+
+[browser] Razorpay Checkout success → POST /payments/verify   (session auth)
+  { providerOrderId, providerPaymentId, signature }
+   → caller must own the order
+   → RazorpayPaymentGateway.confirmCheckout():
+       1. signature == HMAC-SHA256(order_id + "|" + payment_id, KEY_SECRET),
+          constant-time compare — else 400 PAYMENT_VERIFICATION_FAILED,
+          nothing else runs
+       2. GET the payment from Razorpay's API (server-to-server); it must
+          belong to this Razorpay order
+       3. status `authorized` → capture it; anything but `captured` → 400
+   → then the same transactional path as a webhook (below), with event id
+     `checkout:<payment_id>`
 
 [external] provider webhook → POST /payments/webhook   (no session auth — the
                                                           caller is the
                                                           provider, verified
                                                           by signature)
   receive
-   → PaymentGateway.verifyWebhook(rawBody, signature) — invalid signature is
-     rejected (errorCode PAYMENT_WEBHOOK_INVALID, 400) before anything else
-     runs, regardless of what the body claims
+   → PaymentGateway.verifyWebhook({ rawBody, body, headers }) — invalid
+     signature is rejected (errorCode PAYMENT_WEBHOOK_INVALID, 400) before
+     anything else runs, regardless of what the body claims. Razorpay:
+     HMAC-SHA256 of the exact raw request bytes with RAZORPAY_WEBHOOK_SECRET
+     (`X-Razorpay-Signature`); event id from `X-Razorpay-Event-Id`. Only
+     `payment.captured` / `payment.failed` are acted on; other authentic
+     events are acknowledged (200, status IGNORED) and nothing is recorded.
    ── everything below is ONE transaction (ADR-036) ──
    → claim the event: INSERT payment_webhook_events (status RECEIVED)
      ON CONFLICT (provider, provider_event_id) DO NOTHING. Already present
@@ -130,16 +150,35 @@ entitlement created") end-to-end without bypassing signature/amount
 verification.
 
 **The frontend is never trusted to report payment success.** Entitlements are
-only created by the server-side webhook-verification path (`processWebhook`),
-never by a client callback or redirect.
+only created after the server has authenticated the outcome *with the
+provider*: a signature-verified webhook, or a checkout result whose
+signature is verified **and** whose payment is re-fetched from Razorpay's
+API (ADR-039). The browser's "it worked" alone grants nothing.
 
-**Not implemented**: a real (non-mock) `PaymentGateway` implementation
-(Razorpay/Stripe/etc. — add one behind the same interface when a real
-provider is chosen); raw-byte webhook signature verification (the mock
-gateway signs the parsed JSON body, which is adequate for local dev/tests
-but a real provider integration should verify over the raw request bytes
-per that provider's documented scheme, since JSON re-serialization is not
-guaranteed byte-identical to what was received).
+**Why both paths (Razorpay).** `/payments/verify` gives the student
+instant access when they finish checkout. The webhook covers the cases
+where the browser never comes back (tab closed, network lost after paying).
+Whichever arrives second is a no-op — the order is already PAID and
+entitlement creation is idempotent per product item.
+
+### Razorpay setup
+
+1. `.env`: `PAYMENT_PROVIDER=razorpay`, `RAZORPAY_KEY_ID`,
+   `RAZORPAY_KEY_SECRET` (Dashboard → Account & Settings → API Keys). Startup
+   fails if either is missing.
+2. Dashboard → Webhooks → add `https://<api-host>/api/v1/payments/webhook`,
+   events **payment.captured** and **payment.failed**, and a secret →
+   `RAZORPAY_WEBHOOK_SECRET`. Required in production (startup fails without
+   it). Locally Razorpay can't reach `localhost`, so the webhook only works
+   through a tunnel (e.g. ngrok); checkout + verify work without it.
+3. Test mode (`rzp_test_` keys) never moves real money; production logs a
+   warning if it starts with test keys. Use Razorpay's test cards/UPI
+   (`success@razorpay`) to pay.
+
+Orders below ₹1.00 (100 paise) are rejected before calling Razorpay
+(422 VALIDATION_ERROR). Razorpay API/auth failures return **502
+PAYMENT_PROVIDER_ERROR**, not 401 — a 401 from this API means "your session
+expired" and logs the student out; the real cause is logged server-side.
 
 ## Entitlements
 

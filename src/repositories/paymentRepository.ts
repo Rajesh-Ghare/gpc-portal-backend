@@ -13,6 +13,10 @@ export async function findPendingPaymentByOrderId(orderId: string) {
   return Payment.findOne({ where: { orderId, status: 'PENDING' }, order: [['createdAt', 'DESC']] });
 }
 
+export async function findPaymentByProviderOrderId(providerOrderId: string) {
+  return Payment.findOne({ where: { providerOrderId } });
+}
+
 export async function findPaymentByProviderOrderIdForUpdate(providerOrderId: string, transaction: Transaction) {
   return Payment.findOne({ where: { providerOrderId }, transaction, lock: transaction.LOCK.UPDATE });
 }

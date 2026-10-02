@@ -75,7 +75,10 @@ verified with a validly-signed-but-tampered-amount payload in
 order flip to `PAID` and entitlements get created. **The frontend's
 "payment success" callback/redirect is never sufficient on its own to grant
 an entitlement** — there is no code path from a client request directly to
-an entitlement being created; the mock provider's `POST
+an entitlement being created. Razorpay's checkout callback
+(`POST /payments/verify`, ADR-039) only grants access after its HMAC
+signature is verified with the key secret *and* the payment is re-fetched
+from Razorpay's API and confirmed captured for that exact order; the mock provider's `POST
 /payments/:paymentId/simulate` (guarded to only exist when
 `PAYMENT_PROVIDER=mock`) still goes through this exact same
 `processWebhook()` function via a real HMAC-signed payload, not a shortcut.
@@ -161,6 +164,14 @@ own?").
 - [x] **Concurrent duplicate webhook deliveries are processed exactly
       once, and a late failure event never un-pays a captured payment** —
       verified, same file.
+- [x] **A forged Razorpay checkout signature marks nothing paid**, and a
+      validly-signed but not-captured payment isn't accepted — verified,
+      `tests/integration/razorpay.test.ts` + `tests/unit/razorpayGateway.test.ts`
+      (ADR-039). Webhooks are verified over the raw bytes; a body altered
+      after signing is rejected.
+- [x] **The Razorpay key secret and webhook secret never reach the
+      client** — verified, `razorpay.test.ts` asserts neither appears in
+      the create-payment response; the frontend gets only the public key id.
 - [x] **A student cannot create or simulate a payment for another
       student's order** — verified, same file
       (`orderPolicy.ensureOwnsOrder`, `errorCode FORBIDDEN`).

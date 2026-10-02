@@ -66,6 +66,34 @@ export function assertNoMockProvidersInProduction(config: {
   }
 }
 
+/**
+ * Fails startup on missing provider credentials instead of on the first
+ * student's payment. The webhook secret is only required in production:
+ * locally Razorpay can't reach the webhook anyway (no public URL), and the
+ * checkout-verification path works without it.
+ */
+export function assertPaymentProviderConfig(config: {
+  nodeEnv: string;
+  paymentProvider: string;
+  razorpay: { keyId: string; keySecret: string; webhookSecret: string | null };
+}) {
+  if (config.paymentProvider !== 'razorpay') return;
+
+  const missing = [
+    config.razorpay.keyId ? null : 'RAZORPAY_KEY_ID',
+    config.razorpay.keySecret ? null : 'RAZORPAY_KEY_SECRET',
+    config.nodeEnv === 'production' && !config.razorpay.webhookSecret ? 'RAZORPAY_WEBHOOK_SECRET' : null,
+  ].filter((name): name is string => name !== null);
+
+  if (missing.length > 0) {
+    throw new Error(`PAYMENT_PROVIDER=razorpay requires: ${missing.join(', ')}`);
+  }
+
+  if (config.nodeEnv === 'production' && config.razorpay.keyId.startsWith('rzp_test_')) {
+    console.warn('[env] Razorpay TEST keys in production — no real money will be collected.');
+  }
+}
+
 const nodeEnv = process.env.NODE_ENV || 'development';
 const baseDbName = required('DB_NAME', 'competitive_exam');
 
@@ -122,6 +150,13 @@ export const env = {
   trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
 
   paymentProvider: process.env.PAYMENT_PROVIDER || 'mock',
+  // Server-side only — the key secret and webhook secret must never be sent
+  // to the browser (the key id is public and is, via checkoutOptions()).
+  razorpay: {
+    keyId: process.env.RAZORPAY_KEY_ID || '',
+    keySecret: process.env.RAZORPAY_KEY_SECRET || '',
+    webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET || null,
+  },
   aiProvider: process.env.AI_PROVIDER || 'mock',
 
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
@@ -132,3 +167,4 @@ assertNoMockProvidersInProduction({
   otpProvider: env.otp.provider,
   paymentProvider: env.paymentProvider,
 });
+assertPaymentProviderConfig(env);
