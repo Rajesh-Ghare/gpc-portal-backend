@@ -1,11 +1,12 @@
+import type { Transaction } from 'sequelize';
 import { Attempt } from '../models';
 
-export async function countAttemptsForUserTest(userId: string, testId: string): Promise<number> {
-  return Attempt.count({ where: { userId, testId } });
+export async function countAttemptsForUserTest(userId: string, testId: string, transaction?: Transaction): Promise<number> {
+  return Attempt.count({ where: { userId, testId }, transaction });
 }
 
-export async function findInProgressAttempt(userId: string, testId: string) {
-  return Attempt.findOne({ where: { userId, testId, status: 'IN_PROGRESS' } });
+export async function findInProgressAttempt(userId: string, testId: string, transaction?: Transaction) {
+  return Attempt.findOne({ where: { userId, testId, status: 'IN_PROGRESS' }, transaction });
 }
 
 export async function findAttemptById(id: string) {

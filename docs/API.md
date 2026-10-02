@@ -64,8 +64,11 @@ AI_JOB_NOT_FOUND, AI_GENERATION_FAILED
 
 USER_NOT_FOUND, RESULT_NOT_RELEASED, RESULT_NOT_FOUND
 
-FORBIDDEN, VALIDATION_ERROR, NOT_FOUND, INTERNAL_ERROR
+RATE_LIMITED, FORBIDDEN, VALIDATION_ERROR, NOT_FOUND, INTERNAL_ERROR
 ```
+
+`RATE_LIMITED` is always HTTP 429 with a `Retry-After` header (seconds) and
+`errors: [{ retryAfterSeconds }]` carrying the same value.
 
 ## Endpoints (Status Tracked in DEVELOPMENT_STATUS.md)
 
@@ -73,12 +76,17 @@ FORBIDDEN, VALIDATION_ERROR, NOT_FOUND, INTERNAL_ERROR
 
 ```
 POST /auth/request-otp   { mobileNumber: string (10 digits) }
-                          → { mobileNumber, expiresAt }
+                          → { mobileNumber, expiresAt, resendAvailableAt }
+                          errorCode RATE_LIMITED (429) — resend cooldown, or hourly
+                            per-number / per-IP send cap (docs/AUTHENTICATION.md)
 
 POST /auth/verify-otp    { mobileNumber: string, otp: string (6 digits) }
                           → { token, user: { id, mobileNumber, fullName, status } }
-                          errorCode AUTH_OTP_EXPIRED  — no active OTP request found
-                          errorCode AUTH_OTP_INVALID  — wrong code, or attempt limit exceeded
+                          errorCode AUTH_OTP_EXPIRED  — no active OTP request found, or
+                            this OTP was already used
+                          errorCode AUTH_OTP_INVALID  — wrong code, or this OTP's
+                            attempt limit exceeded
+                          errorCode RATE_LIMITED (429) — hourly per-number verify cap
 
 GET  /auth/me             (Authorization: Bearer <token>)
                           → { id, mobileNumber, email, fullName, status, roles: string[],
@@ -182,7 +190,14 @@ POST /payments/webhook                   NO session auth — the caller is the p
                                           provider, authenticated by signature, not a
                                           token. See docs/COMMERCE_AND_PAYMENTS.md for
                                           the full verify → dedupe → verify-amount →
-                                          mark-paid → create-entitlements sequence.
+                                          mark-paid → create-entitlements sequence
+                                          (all-or-nothing in one transaction, ADR-036).
+                                          → { alreadyProcessed: true }
+                                          | { alreadyProcessed: false, status: 'PAID',
+                                              entitlementsCreated }
+                                          | { alreadyProcessed: false, status: 'FAILED' }
+                                          | { alreadyProcessed: false, status: 'IGNORED' }
+                                            (failure event for an already-PAID payment)
                                           errorCode PAYMENT_WEBHOOK_INVALID / PAYMENT_NOT_FOUND /
                                             PAYMENT_VERIFICATION_FAILED
 POST /payments/:paymentId/simulate       { outcome?: 'PAID' | 'FAILED' }  (default PAID)

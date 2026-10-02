@@ -1,16 +1,17 @@
 import type { z } from 'zod';
-import { Op } from 'sequelize';
+import { Op, type Transaction } from 'sequelize';
 import { AppError } from '../errors/AppError';
 import { ErrorCode } from '../errors/errorCodes';
 import * as entitlementRepo from '../repositories/entitlementRepository';
 import * as productRepo from '../repositories/productRepository';
+import * as orderRepo from '../repositories/orderRepository';
 import { getTestOrThrow } from './testService';
 import { recordAudit } from './auditLogService';
 import { slugify } from '../utils/slugify';
 import { ProductItem } from '../models';
 import type { grantEntitlementSchema } from '../validations/entitlement.validation';
 import type { AuditContext } from './questionService';
-import type { Order, Test } from '../models';
+import type { Entitlement, Order, Test } from '../models';
 
 type GrantEntitlementInput = z.infer<typeof grantEntitlementSchema>;
 
@@ -102,8 +103,9 @@ export async function grantEntitlement(input: GrantEntitlementInput, adminId: st
  * can span multiple subjects, so "does this test belong to that subject
  * package" has no unambiguous answer — see docs/KNOWN_ISSUES.md.
  */
-export async function findActiveEntitlementForTest(userId: string, test: Test) {
+export async function findProductItemIdsGrantingTest(test: Test): Promise<string[]> {
   const candidates = await ProductItem.findAll({
+    attributes: ['id'],
     where: {
       [Op.or]: [
         { accessType: 'INDIVIDUAL_TEST', testId: test.id },
@@ -113,12 +115,25 @@ export async function findActiveEntitlementForTest(userId: string, test: Test) {
       ],
     },
   });
+  return candidates.map((c) => c.id);
+}
 
-  if (candidates.length === 0) return null;
-  return entitlementRepo.findActiveByUserAndProductItemIds(
-    userId,
-    candidates.map((c) => c.id),
+/**
+ * Picks which of a user's active entitlements a new attempt should consume:
+ * only ones with attempts remaining, soonest-expiring first (so a
+ * time-limited pass is used before it lapses), then oldest. Returns null if
+ * none has attempts left. A user holding an exhausted pass *and* a fresh
+ * package must never be told their limit is exceeded just because the
+ * exhausted one happened to be found first.
+ */
+export function selectEntitlementToConsume(entitlements: Entitlement[]): Entitlement | null {
+  const usable = entitlements.filter((e) => e.attemptLimit === null || e.attemptsUsed < e.attemptLimit);
+  usable.sort(
+    (a, b) =>
+      (a.validUntil?.getTime() ?? Infinity) - (b.validUntil?.getTime() ?? Infinity) ||
+      a.createdAt.getTime() - b.createdAt.getTime(),
   );
+  return usable[0] ?? null;
 }
 
 export async function listEntitlements(filter: entitlementRepo.EntitlementFilter = {}) {
@@ -133,15 +148,21 @@ export async function listEntitlements(filter: entitlementRepo.EntitlementFilter
  * not per-product_item, so this is where that fan-out happens). Idempotent
  * per item — a webhook retry (or a product with items added after purchase
  * being re-scanned) never duplicates an already-active entitlement.
+ *
+ * Runs inside the webhook's transaction (ADR-036), which holds the order's
+ * row lock — so it commits or rolls back together with the order/payment
+ * update and the webhook-event record, and two deliveries can't race the
+ * find-then-create below.
  */
-export async function createEntitlementsForPaidOrder(order: Order) {
+export async function createEntitlementsForPaidOrder(order: Order, transaction: Transaction) {
   const created = [];
-  const productIds = [...new Set((order.items ?? []).map((item) => item.productId))];
+  const orderItems = await orderRepo.listOrderItems(order.id, transaction);
+  const productIds = [...new Set(orderItems.map((item) => item.productId))];
 
   for (const productId of productIds) {
-    const items = await productRepo.listItems(productId);
+    const items = await productRepo.listItems(productId, transaction);
     for (const item of items) {
-      const existing = await entitlementRepo.findActiveByUserAndProductItem(order.userId, item.id);
+      const existing = await entitlementRepo.findActiveByUserAndProductItem(order.userId, item.id, transaction);
       if (existing) continue;
 
       const validUntil = item.accessDurationDays
@@ -158,15 +179,18 @@ export async function createEntitlementsForPaidOrder(order: Order) {
         validUntil,
         grantedBy: null,
         metadata: { source: 'PURCHASE', orderId: order.id },
-      });
+      }, transaction);
 
-      await recordAudit({
-        actorId: null,
-        action: 'entitlement.grant',
-        entityType: 'entitlement',
-        entityId: entitlement.id,
-        afterData: { userId: order.userId, productItemId: item.id, orderId: order.id, source: 'PURCHASE' },
-      });
+      await recordAudit(
+        {
+          actorId: null,
+          action: 'entitlement.grant',
+          entityType: 'entitlement',
+          entityId: entitlement.id,
+          afterData: { userId: order.userId, productItemId: item.id, orderId: order.id, source: 'PURCHASE' },
+        },
+        transaction,
+      );
 
       created.push(entitlement);
     }

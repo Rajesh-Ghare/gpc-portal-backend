@@ -9,11 +9,13 @@ import {
   ResultDetail,
   sequelize,
 } from '../models';
+import type { Transaction } from 'sequelize';
 import * as attemptRepo from '../repositories/attemptRepository';
-import { incrementAttemptsUsed } from '../repositories/entitlementRepository';
+import { incrementAttemptsUsed, listActiveByUserAndProductItemIds } from '../repositories/entitlementRepository';
+import { acquireTransactionLock } from '../repositories/lockRepository';
 import { ensureOwnsAttempt } from '../policies/attemptPolicy';
-import { getPublishedTestOrThrow } from './testBrowseService';
-import { findActiveEntitlementForTest } from './entitlementService';
+import { getPublishedTestOrThrow, getTestForAttemptOrThrow } from './testBrowseService';
+import { findProductItemIdsGrantingTest, selectEntitlementToConsume } from './entitlementService';
 import { getQuestionSelectionStrategy } from '../strategies/questionSelection';
 import { getEvaluator } from '../strategies/evaluation';
 import { shuffle } from '../utils/shuffle';
@@ -31,27 +33,73 @@ export interface CreateAttemptContext {
   userAgent?: string | null;
 }
 
+/**
+ * Checks access + attempt policy and returns the entitlement to consume.
+ * Called once without locks as a cheap pre-check (so an unentitled request
+ * never runs question selection), then again inside the transaction with
+ * the entitlement rows locked — only the locked result is trusted.
+ */
+async function checkAttemptAllowed(
+  userId: string,
+  test: Awaited<ReturnType<typeof getPublishedTestOrThrow>>,
+  productItemIds: string[],
+  transaction?: Transaction,
+) {
+  const active = await listActiveByUserAndProductItemIds(userId, productItemIds, {
+    transaction,
+    lock: Boolean(transaction),
+  });
+  if (active.length === 0) {
+    throw new AppError(ErrorCode.ENTITLEMENT_NOT_FOUND, 'You do not have access to this test', 403);
+  }
+  const entitlement = selectEntitlementToConsume(active);
+  if (!entitlement) {
+    throw new AppError(ErrorCode.ATTEMPT_LIMIT_EXCEEDED, 'You have used all attempts granted for this test', 403);
+  }
+
+  const priorAttemptCount = await attemptRepo.countAttemptsForUserTest(userId, test.id, transaction);
+  if (test.attemptPolicy === 'SINGLE' && priorAttemptCount >= 1) {
+    throw new AppError(ErrorCode.ATTEMPT_LIMIT_EXCEEDED, 'This test only allows a single attempt', 403);
+  }
+  return { entitlement, priorAttemptCount };
+}
+
+/**
+ * Concurrency (ADR-037): the transaction takes an advisory lock on
+ * (user, test) — so a double-clicked Start returns the one attempt instead
+ * of racing the partial unique index into a 500 — and then row-locks the
+ * user's matching entitlements, so attempts on *different* tests sharing
+ * one package entitlement can't both pass the attempt-limit check.
+ * Lock order is always advisory lock → entitlement rows (by id).
+ */
 export async function createAttempt(testId: string, userId: string, context: CreateAttemptContext = {}) {
   const test = await getPublishedTestOrThrow(testId);
 
   const existingInProgress = await attemptRepo.findInProgressAttempt(userId, testId);
   if (existingInProgress) {
-    return getAttemptDetail(existingInProgress.id, userId);
+    if (new Date() <= existingInProgress.expiresAt) {
+      return getAttemptDetail(existingInProgress.id, userId);
+    }
+    // Time ran out while the student was away: finalize it (auto_submitted)
+    // and fall through to start a new one, subject to the normal limits —
+    // rather than handing back a finished attempt from a Start button.
+    await submitAttempt(existingInProgress.id, userId);
   }
 
-  const entitlement = await findActiveEntitlementForTest(userId, test);
-  if (!entitlement) {
-    throw new AppError(ErrorCode.ENTITLEMENT_NOT_FOUND, 'You do not have access to this test', 403);
-  }
-  if (entitlement.attemptLimit !== null && entitlement.attemptsUsed >= entitlement.attemptLimit) {
-    throw new AppError(ErrorCode.ATTEMPT_LIMIT_EXCEEDED, 'You have used all attempts granted for this test', 403);
+  const productItemIds = await findProductItemIdsGrantingTest(test);
+  try {
+    await checkAttemptAllowed(userId, test, productItemIds);
+  } catch (err) {
+    // A concurrent start (double-click) may have created the attempt — and
+    // used up the last allowed attempt — since the in-progress check above.
+    // Return that attempt rather than rejecting the duplicate click.
+    const justCreated = await attemptRepo.findInProgressAttempt(userId, testId);
+    if (justCreated) return getAttemptDetail(justCreated.id, userId);
+    throw err;
   }
 
-  const priorAttemptCount = await attemptRepo.countAttemptsForUserTest(userId, testId);
-  if (test.attemptPolicy === 'SINGLE' && priorAttemptCount >= 1) {
-    throw new AppError(ErrorCode.ATTEMPT_LIMIT_EXCEEDED, 'This test only allows a single attempt', 403);
-  }
-
+  // Selection can be slow (rule-based) and only reads approved questions,
+  // so it runs before the transaction rather than while holding locks.
   const strategy = getQuestionSelectionStrategy(test);
   let selected = await strategy.selectQuestions(test);
   if (test.randomizeQuestions) {
@@ -61,11 +109,21 @@ export async function createAttempt(testId: string, userId: string, context: Cre
     throw new AppError(ErrorCode.TEST_NOT_AVAILABLE, 'This test has no questions available to attempt', 409);
   }
 
-  const startedAt = new Date();
-  const expiresAt = new Date(startedAt.getTime() + test.durationSeconds * 1000);
   const totalMarks = selected.reduce((sum, q) => sum + Number(q.marks), 0);
 
-  const attempt = await sequelize.transaction(async (transaction) => {
+  const attemptId = await sequelize.transaction(async (transaction) => {
+    await acquireTransactionLock(`attempt:${userId}:${testId}`, transaction);
+
+    // A concurrent request may have created it while we waited for the lock.
+    const inProgress = await attemptRepo.findInProgressAttempt(userId, testId, transaction);
+    if (inProgress) return inProgress.id;
+
+    const { entitlement, priorAttemptCount } = await checkAttemptAllowed(userId, test, productItemIds, transaction);
+
+    // Timer starts once the attempt is actually granted, not before the lock wait.
+    const startedAt = new Date();
+    const expiresAt = new Date(startedAt.getTime() + test.durationSeconds * 1000);
+
     const created = await Attempt.create(
       {
         userId,
@@ -96,12 +154,12 @@ export async function createAttempt(testId: string, userId: string, context: Cre
       { transaction },
     );
 
-    await incrementAttemptsUsed(entitlement);
+    await incrementAttemptsUsed(entitlement, transaction);
 
-    return created;
+    return created.id;
   });
 
-  return getAttemptDetail(attempt.id, userId);
+  return getAttemptDetail(attemptId, userId);
 }
 
 /** If an IN_PROGRESS attempt's time is up, submit it (auto_submitted=true) before proceeding. */
@@ -321,8 +379,8 @@ export async function submitAttempt(attemptId: string, userId: string) {
     const accuracyPercentage = attemptedQuestions > 0 ? (correctAnswers / attemptedQuestions) * 100 : 0;
     const timeTakenSeconds = Math.floor((now.getTime() - attempt.startedAt.getTime()) / 1000);
 
-    const test = await getPublishedTestOrThrow(attempt.testId).catch(() => null);
-    const releaseImmediately = test?.resultVisibility === 'IMMEDIATE';
+    const test = await getTestForAttemptOrThrow(attempt.testId);
+    const releaseImmediately = test.resultVisibility === 'IMMEDIATE';
 
     const result = await Result.create(
       {
@@ -375,7 +433,7 @@ export async function getResult(attemptId: string, userId: string) {
     throw new AppError(ErrorCode.NOT_FOUND, 'Result not found', 404);
   }
 
-  const test = await getPublishedTestOrThrow(attempt.testId);
+  const test = await getTestForAttemptOrThrow(attempt.testId);
   if (test.resultVisibility !== 'IMMEDIATE' && !result.releasedAt) {
     throw new AppError(ErrorCode.RESULT_NOT_RELEASED, 'Result has not been released yet', 403);
   }

@@ -48,14 +48,25 @@ export async function createPayment(input: CreatePaymentInput, userId: string) {
   });
 }
 
+/** Compares money in integer minor units (paise/cents), never as floats. */
+function toMinorUnits(amount: string | number): number {
+  return Math.round(Number(amount) * 100);
+}
+
 /**
  * The only place an order transitions to PAID and entitlements get created
  * from a purchase — never from a client-trusted "payment succeeded"
- * callback (see docs/SECURITY.md). Verifies the signature, rejects/ignores
- * a duplicate provider event (idempotency via payment_webhook_events'
- * unique (provider, provider_event_id) index), and re-verifies the
- * amount/currency against the order's own stored total — never trusts the
- * webhook body's amount blindly.
+ * callback (see docs/SECURITY.md). Verifies the signature, then does
+ * everything else in **one transaction** (ADR-036): claim the event id
+ * (idempotency via payment_webhook_events' unique index), lock the payment
+ * and order rows, re-verify amount/currency against the order's own stored
+ * total, update payment/order, and create entitlements.
+ *
+ * Any failure rolls back everything — including the event claim — so the
+ * provider's retry reprocesses it rather than being skipped as a
+ * duplicate. (Previously the event was recorded first and the rest
+ * outside a transaction, so a failure mid-way left a paid order with no
+ * entitlement and every retry answered "already processed".)
  */
 export async function processWebhook(rawBody: unknown, signatureHeader: string | undefined) {
   const gateway = getPaymentGateway();
@@ -64,62 +75,64 @@ export async function processWebhook(rawBody: unknown, signatureHeader: string |
     throw new AppError(ErrorCode.PAYMENT_WEBHOOK_INVALID, 'Webhook signature verification failed', 400);
   }
 
-  const existingEvent = await paymentRepo.findWebhookEvent(env.paymentProvider, result.eventId);
-  if (existingEvent) {
-    return { alreadyProcessed: true as const };
-  }
+  return sequelize.transaction(async (transaction) => {
+    const eventRowId = await paymentRepo.claimWebhookEvent(
+      {
+        provider: env.paymentProvider,
+        providerEventId: result.eventId,
+        eventType: result.eventType,
+        payload: typeof rawBody === 'object' && rawBody !== null ? (rawBody as Record<string, unknown>) : {},
+      },
+      transaction,
+    );
+    if (!eventRowId) {
+      return { alreadyProcessed: true as const };
+    }
 
-  const payment = await paymentRepo.findPaymentByProviderOrderId(result.providerOrderId);
-  if (!payment) {
-    throw new AppError(ErrorCode.PAYMENT_NOT_FOUND, 'Payment not found for this provider order', 404);
-  }
+    // Lock order: payment, then order — the only code path that locks both,
+    // so concurrent events (for the same or different payments of one
+    // order) serialize without deadlocking.
+    const payment = await paymentRepo.findPaymentByProviderOrderIdForUpdate(result.providerOrderId, transaction);
+    if (!payment) {
+      throw new AppError(ErrorCode.PAYMENT_NOT_FOUND, 'Payment not found for this provider order', 404);
+    }
 
-  const order = await orderRepo.findOrderById(payment.orderId);
-  if (!order) {
-    throw new AppError(ErrorCode.ORDER_NOT_FOUND, 'Order not found for this payment', 404);
-  }
+    const order = await orderRepo.findOrderByIdForUpdate(payment.orderId, transaction);
+    if (!order) {
+      throw new AppError(ErrorCode.ORDER_NOT_FOUND, 'Order not found for this payment', 404);
+    }
 
-  if (Number(order.totalAmount) !== result.amount || order.currencyCode !== result.currencyCode) {
-    throw new AppError(ErrorCode.PAYMENT_VERIFICATION_FAILED, 'Webhook amount/currency does not match the order', 422);
-  }
+    if (toMinorUnits(order.totalAmount) !== toMinorUnits(result.amount) || order.currencyCode !== result.currencyCode) {
+      throw new AppError(ErrorCode.PAYMENT_VERIFICATION_FAILED, 'Webhook amount/currency does not match the order', 422);
+    }
 
-  await paymentRepo.createWebhookEvent({
-    provider: env.paymentProvider,
-    providerEventId: result.eventId,
-    eventType: result.eventType,
-    payload: typeof rawBody === 'object' && rawBody !== null ? (rawBody as Record<string, unknown>) : {},
-    status: 'PROCESSED',
-    processedAt: new Date(),
-  });
+    const providerPaymentId = result.providerPaymentId ?? payment.providerPaymentId;
 
-  if (result.status === 'FAILED') {
-    await paymentRepo.updatePayment(payment, {
-      status: 'FAILED',
-      failedAt: new Date(),
-      providerPaymentId: result.providerPaymentId ?? payment.providerPaymentId,
-    });
-    return { alreadyProcessed: false as const, status: 'FAILED' as const };
-  }
-
-  if (payment.status !== 'PAID') {
-    await sequelize.transaction(async (transaction) => {
-      await payment.update(
-        {
-          status: 'PAID',
-          paidAt: new Date(),
-          providerPaymentId: result.providerPaymentId ?? payment.providerPaymentId,
-        },
-        { transaction },
-      );
-      if (order.status !== 'PAID') {
-        await order.update({ status: 'PAID', paidAt: new Date() }, { transaction });
+    if (result.status === 'FAILED') {
+      // Providers can deliver events out of order; a failure arriving after
+      // a capture must never un-pay a payment (or its granted access).
+      if (payment.status === 'PAID') {
+        await paymentRepo.markWebhookEventProcessed(eventRowId, 'IGNORED', transaction);
+        return { alreadyProcessed: false as const, status: 'IGNORED' as const };
       }
-    });
-  }
+      await paymentRepo.updatePayment(payment, { status: 'FAILED', failedAt: new Date(), providerPaymentId }, transaction);
+      await paymentRepo.markWebhookEventProcessed(eventRowId, 'PROCESSED', transaction);
+      return { alreadyProcessed: false as const, status: 'FAILED' as const };
+    }
 
-  const entitlements = await createEntitlementsForPaidOrder(order);
+    const now = new Date();
+    if (payment.status !== 'PAID') {
+      await paymentRepo.updatePayment(payment, { status: 'PAID', paidAt: now, providerPaymentId }, transaction);
+    }
+    if (order.status !== 'PAID') {
+      await order.update({ status: 'PAID', paidAt: now }, { transaction });
+    }
 
-  return { alreadyProcessed: false as const, status: 'PAID' as const, entitlementsCreated: entitlements.length };
+    const entitlements = await createEntitlementsForPaidOrder(order, transaction);
+    await paymentRepo.markWebhookEventProcessed(eventRowId, 'PROCESSED', transaction);
+
+    return { alreadyProcessed: false as const, status: 'PAID' as const, entitlementsCreated: entitlements.length };
+  });
 }
 
 /**

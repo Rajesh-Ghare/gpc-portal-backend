@@ -1,3 +1,4 @@
+import type { Transaction } from 'sequelize';
 import { AuditLog } from '../models';
 
 export interface RecordAuditInput {
@@ -18,15 +19,18 @@ export interface RecordAuditInput {
  * role/permission changes, admin overrides) — call this explicitly from
  * those service methods, not from every write.
  */
-export async function recordAudit(input: RecordAuditInput) {
-  await AuditLog.create({
-    actorId: input.actorId,
-    action: input.action,
-    entityType: input.entityType,
-    entityId: input.entityId,
-    beforeData: input.beforeData ?? null,
-    afterData: input.afterData ?? null,
-    ipAddress: input.ipAddress ?? null,
-    userAgent: input.userAgent ?? null,
-  });
+export async function recordAudit(input: RecordAuditInput, transaction?: Transaction) {
+  await AuditLog.create(
+    {
+      actorId: input.actorId,
+      action: input.action,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      beforeData: input.beforeData ?? null,
+      afterData: input.afterData ?? null,
+      ipAddress: input.ipAddress ?? null,
+      userAgent: input.userAgent ?? null,
+    },
+    { transaction },
+  );
 }

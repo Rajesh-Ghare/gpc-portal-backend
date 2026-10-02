@@ -2,7 +2,14 @@
 
 ## High
 
-(none)
+- **No real (non-mock) `PaymentGateway` or `OtpProvider` implementation
+  exists yet — production cannot start without them** (ADR-034: the server
+  refuses to start with `NODE_ENV=production` and either provider set to
+  `mock`). Must be built before Phase 15 can ship. A real payment provider
+  (Razorpay/Stripe/etc.) needs its own class behind the same interface plus
+  real webhook signature verification per that provider's documented scheme
+  (see the raw-body-vs-parsed-body note under Technical Debt); a real OTP
+  provider needs an SMS integration behind `OtpProvider`.
 
 ## Medium
 
@@ -58,11 +65,6 @@
   `page`/`pageSize` shape, but no endpoint implements it yet). Fine at
   current data volumes; add pagination as a cross-cutting pass once any
   list endpoint's result set could realistically grow unbounded.
-- **No real (non-mock) `PaymentGateway` implementation exists yet.** Only
-  `MockPaymentGateway` is wired up (`PAYMENT_PROVIDER=mock`); a real
-  provider (Razorpay/Stripe/etc.) needs its own class behind the same
-  interface plus real webhook signature verification per that provider's
-  documented scheme (see the raw-body-vs-parsed-body note below).
 - **The mock payment gateway signs the parsed JSON body, not raw request
   bytes.** Adequate for local dev/tests (there's no real network hop to
   introduce re-serialization drift), but a real provider integration

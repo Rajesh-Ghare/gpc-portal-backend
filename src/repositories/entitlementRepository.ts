@@ -1,9 +1,10 @@
 import { Op } from 'sequelize';
-import type { CreationAttributes } from 'sequelize';
+import type { CreationAttributes, Transaction } from 'sequelize';
 import { Entitlement, User } from '../models';
 
-export async function findActiveByUserAndProductItem(userId: string, productItemId: string) {
+export async function findActiveByUserAndProductItem(userId: string, productItemId: string, transaction?: Transaction) {
   return Entitlement.findOne({
+    transaction,
     where: {
       userId,
       productItemId,
@@ -17,9 +18,22 @@ export async function findActiveByUserAndProductItem(userId: string, productItem
   });
 }
 
-export async function findActiveByUserAndProductItemIds(userId: string, productItemIds: string[]) {
-  if (productItemIds.length === 0) return null;
-  return Entitlement.findOne({
+/**
+ * All of a user's currently-active entitlements for these product items.
+ * With `lock`, row-locks them FOR UPDATE in a fixed (id) order, so two
+ * transactions locking overlapping sets can never deadlock.
+ */
+export async function listActiveByUserAndProductItemIds(
+  userId: string,
+  productItemIds: string[],
+  options: { transaction?: Transaction; lock?: boolean } = {},
+) {
+  if (productItemIds.length === 0) return [];
+  const { transaction, lock } = options;
+  return Entitlement.findAll({
+    transaction,
+    lock: lock && transaction ? transaction.LOCK.UPDATE : undefined,
+    order: [['id', 'ASC']],
     where: {
       userId,
       productItemId: { [Op.in]: productItemIds },
@@ -33,13 +47,13 @@ export async function findActiveByUserAndProductItemIds(userId: string, productI
   });
 }
 
-export async function createEntitlement(data: CreationAttributes<Entitlement>) {
-  return Entitlement.create(data);
+export async function createEntitlement(data: CreationAttributes<Entitlement>, transaction?: Transaction) {
+  return Entitlement.create(data, { transaction });
 }
 
-export async function incrementAttemptsUsed(entitlement: Entitlement) {
-  entitlement.attemptsUsed += 1;
-  await entitlement.save();
+/** A single `SET attempts_used = attempts_used + 1` — call with the row already locked in `transaction`. */
+export async function incrementAttemptsUsed(entitlement: Entitlement, transaction: Transaction) {
+  await entitlement.increment('attemptsUsed', { by: 1, transaction });
   return entitlement;
 }
 

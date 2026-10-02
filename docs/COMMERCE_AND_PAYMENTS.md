@@ -88,24 +88,34 @@ POST /payments/create { orderId }
    → PaymentGateway.verifyWebhook(rawBody, signature) — invalid signature is
      rejected (errorCode PAYMENT_WEBHOOK_INVALID, 400) before anything else
      runs, regardless of what the body claims
-   → check payment_webhook_events uniqueness (provider, provider_event_id) —
-     a replayed event returns { alreadyProcessed: true } and touches nothing
-   → look up the payment by providerOrderId (errorCode PAYMENT_NOT_FOUND if
-     unknown) and its order
+   ── everything below is ONE transaction (ADR-036) ──
+   → claim the event: INSERT payment_webhook_events (status RECEIVED)
+     ON CONFLICT (provider, provider_event_id) DO NOTHING. Already present
+     → { alreadyProcessed: true }, nothing else touched. A concurrent
+     duplicate blocks on the unique index until this transaction ends.
+   → lock the payment (by providerOrderId; PAYMENT_NOT_FOUND if unknown),
+     then its order (always in that order — no deadlocks)
    → re-verify amount + currency against the order's OWN stored
-     total_amount/currency_code — never trust the webhook body's amount
-     blindly (errorCode PAYMENT_VERIFICATION_FAILED, 422, on mismatch; no
-     state changes on rejection)
-   → record the payment_webhook_events row
-   → status=FAILED: payments row → FAILED, failedAt set; order untouched
-   → status=PAID: one transaction sets payments row → PAID/paidAt and (if
-     not already) orders row → PAID/paidAt, then
-     entitlementService.createEntitlementsForPaidOrder(order) fans out one
-     entitlement per product_item belonging to the order's product
-     (ADR-031 — an order_item is per-product, this is where the fan-out to
-     individual product_items happens), skipping any product_item the user
-     already has an active entitlement for (idempotent per item, not just
-     per webhook event)
+     total_amount/currency_code, compared in integer minor units — never
+     trust the webhook body's amount blindly (errorCode
+     PAYMENT_VERIFICATION_FAILED, 422, on mismatch)
+   → status=FAILED: if the payment is already PAID, ignore it (event row →
+     IGNORED, response status IGNORED) — out-of-order delivery must never
+     un-pay. Otherwise payments row → FAILED/failedAt; order untouched.
+   → status=PAID: payments row → PAID/paidAt and (if not already) orders
+     row → PAID/paidAt, then
+     entitlementService.createEntitlementsForPaidOrder(order, transaction)
+     fans out one entitlement per product_item belonging to the order's
+     product (ADR-031 — an order_item is per-product, this is where the
+     fan-out to individual product_items happens), skipping any
+     product_item the user already has an active entitlement for
+     (idempotent per item, not just per webhook event)
+   → event row → PROCESSED/processed_at; commit
+
+   Any error rolls back all of it, including the event claim — so the
+   provider's automatic retry reprocesses the event instead of being told
+   "already processed". Rejections (bad amount, unknown payment) therefore
+   leave no trace and are rejected again on every retry.
 ```
 
 **The mock provider goes through this exact same verification path.**

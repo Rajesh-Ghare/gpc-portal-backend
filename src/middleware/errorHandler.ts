@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { AppError } from '../errors/AppError';
+import { AppError, RateLimitError } from '../errors/AppError';
 import { ErrorCode } from '../errors/errorCodes';
 import { sendError } from '../utils/apiResponse';
 
@@ -9,6 +9,9 @@ export function notFoundHandler(req: Request, res: Response) {
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function errorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
+  if (err instanceof RateLimitError) {
+    res.set('Retry-After', String(err.retryAfterSeconds));
+  }
   if (err instanceof AppError) {
     sendError(res, err.errorCode, err.message, err.statusCode, err.errors);
     return;
