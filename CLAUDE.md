@@ -110,9 +110,12 @@ session tokens are never persisted — only their hashes. See
 
 ## Payment Rules
 
-- Entitlements are only created after a verified payment-provider webhook
-  (signature verified, event-idempotency checked, amount/currency verified) —
-  never from a frontend "payment succeeded" signal.
+- Entitlements are only created after the server authenticates the payment
+  with the provider — a verified webhook (signature verified,
+  event-idempotency checked, amount/currency verified), or a checkout
+  result whose signature is verified *and* whose payment is re-fetched from
+  the provider's API (ADR-039) — never from a frontend "payment succeeded"
+  signal alone.
 - All provider-specific logic lives behind a `PaymentGateway` interface; a
   mock provider (`PAYMENT_PROVIDER=mock`) exists for local development and
   must exercise the same verification path as a real provider.

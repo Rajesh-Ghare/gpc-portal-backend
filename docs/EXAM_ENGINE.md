@@ -22,28 +22,48 @@ Validated, in order, by `createAttempt()` (`src/services/attemptService.ts`,
 `POST /tests/:testId/attempts`):
 
 1. Authentication (valid session — `authenticate` middleware).
-2. If an `IN_PROGRESS` attempt already exists for this user/test, it is
-   returned as-is (resume), not treated as an error — verified this doesn't
-   double-charge the entitlement (`attempts_used` only increments once).
+2. If an `IN_PROGRESS` attempt already exists for this user/test and its
+   time hasn't run out, it is returned as-is (resume), not treated as an
+   error — verified this doesn't double-charge the entitlement
+   (`attempts_used` only increments once). If its time *has* run out, it is
+   auto-submitted first and creation continues below, subject to the normal
+   limits — so a `MULTIPLE` test starts a fresh attempt, and a `SINGLE` test
+   returns `ATTEMPT_LIMIT_EXCEEDED` (the one attempt is used).
 3. Test status is `PUBLISHED` and current time is within `available_from`/
    `available_until` (`getPublishedTestOrThrow`, `testBrowseService.ts`).
-4. Entitlement: an active, non-revoked `entitlements` row covering this test
-   — directly (`INDIVIDUAL_TEST`), via its exam (`EXAM_PACKAGE`), via its
-   series if any (`TEST_SERIES`), or a blanket `SUBSCRIPTION`/`ALL_ACCESS`
-   item (`findActiveEntitlementForTest`, `entitlementService.ts`).
-   `SUBJECT_PACKAGE` is not resolved — see ADR-026.
-5. `attempt_policy = SINGLE` blocks a second attempt outright; entitlement's
-   `attempt_limit`/`attempts_used` is checked otherwise (`null` limit =
-   unlimited).
-6. Question selection (below) — a `RULE_BASED` test whose rules can't
+4. Entitlement: the user's active, non-revoked `entitlements` rows covering
+   this test — directly (`INDIVIDUAL_TEST`), via its exam (`EXAM_PACKAGE`),
+   via its series if any (`TEST_SERIES`), or a blanket
+   `SUBSCRIPTION`/`ALL_ACCESS` item (`findProductItemIdsGrantingTest`,
+   `entitlementService.ts`). `SUBJECT_PACKAGE` is not resolved — see
+   ADR-026. None → `ENTITLEMENT_NOT_FOUND`.
+5. Which entitlement to consume (`selectEntitlementToConsume`): only one
+   with attempts left (`attempt_limit` null = unlimited), soonest
+   `valid_until` first, then oldest. None left → `ATTEMPT_LIMIT_EXCEEDED`.
+   A user with an exhausted pass and a fresh package is never rejected
+   because the exhausted one happened to be found first.
+6. `attempt_policy = SINGLE` blocks a second attempt outright.
+7. Question selection (below) — a `RULE_BASED` test whose rules can't
    currently be satisfied throws `TEST_NOT_AVAILABLE` at this point (a
    narrower, later check than `validateTest()`'s publish-time check, since
    the approved-question pool can shrink after publish).
 
-`attempts` + `attempt_questions` are created inside **one
-`sequelize.transaction()`**, and the qualifying entitlement's
-`attempts_used` is incremented in the same transaction — not as a
-best-effort side effect (per `docs/COMMERCE_AND_PAYMENTS.md`).
+Steps 4–6 run once unlocked as a cheap pre-check (so an unentitled request
+never runs question selection), then **again inside the transaction under
+locks** (ADR-037), which is the only result trusted:
+
+- an advisory lock on `(user, test)`, then a re-check for an
+  `IN_PROGRESS` attempt — concurrent starts (double-click) all get the
+  same attempt instead of one hitting the partial unique index as a 500;
+- the user's matching entitlement rows locked `FOR UPDATE` (by id), so
+  attempts on *different* tests sharing one package can't both pass the
+  limit check.
+
+`attempts` + `attempt_questions` are created, and the chosen entitlement's
+`attempts_used` is incremented (`SET attempts_used = attempts_used + 1`),
+all in that **one transaction** — not as a best-effort side effect (per
+`docs/COMMERCE_AND_PAYMENTS.md`). `started_at` is taken inside it, so time
+spent waiting for a lock never comes out of the student's timer.
 
 ## Attempt Snapshot (ADR-008) — Verified
 
@@ -52,6 +72,13 @@ Once `attempt_questions` rows are written, `question_id`/
 for that attempt. Every read path (`getAttemptDetail`, `submitAttempt`,
 `getResult`) reads only from `attempt_questions`/`attempt_answers` — never
 re-resolves `test_questions`/`test_rules` live.
+
+**Results outlive the test's publication.** Only *starting* an attempt
+requires a `PUBLISHED` test. Submission and `GET /attempts/:id/result` look
+the test up in any status — `CLOSED`, `ARCHIVED`, even soft-deleted
+(`getTestForAttemptOrThrow`) — so closing or archiving a test never hides
+results students already earned. The test's visibility settings
+(`result_visibility`, `show_score`, etc.) still apply.
 
 ## Timer (ADR-009) — Verified
 

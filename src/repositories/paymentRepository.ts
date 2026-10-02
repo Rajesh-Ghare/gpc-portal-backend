@@ -1,5 +1,5 @@
-import type { CreationAttributes, InferAttributes } from 'sequelize';
-import { Payment, PaymentWebhookEvent } from '../models';
+import type { CreationAttributes, InferAttributes, Transaction } from 'sequelize';
+import { Payment, PaymentWebhookEvent, sequelize } from '../models';
 
 export async function createPayment(data: CreationAttributes<Payment>) {
   return Payment.create(data);
@@ -17,23 +17,51 @@ export async function findPaymentByProviderOrderId(providerOrderId: string) {
   return Payment.findOne({ where: { providerOrderId } });
 }
 
-export async function updatePayment(payment: Payment, data: Partial<InferAttributes<Payment>>) {
+export async function findPaymentByProviderOrderIdForUpdate(providerOrderId: string, transaction: Transaction) {
+  return Payment.findOne({ where: { providerOrderId }, transaction, lock: transaction.LOCK.UPDATE });
+}
+
+export async function updatePayment(
+  payment: Payment,
+  data: Partial<InferAttributes<Payment>>,
+  transaction?: Transaction,
+) {
   payment.set(data);
-  await payment.save();
+  await payment.save({ transaction });
   return payment;
 }
 
-export async function findWebhookEvent(provider: string, providerEventId: string) {
-  return PaymentWebhookEvent.findOne({ where: { provider, providerEventId } });
+export interface ClaimWebhookEventInput {
+  provider: string;
+  providerEventId: string;
+  eventType: string;
+  payload: Record<string, unknown>;
 }
 
-export async function createWebhookEvent(data: CreationAttributes<PaymentWebhookEvent>) {
-  return PaymentWebhookEvent.create(data);
+/**
+ * Inserts the event row as RECEIVED, or returns null if this
+ * (provider, provider_event_id) already exists. The unique index is the
+ * idempotency lock: a concurrent duplicate delivery blocks on it until the
+ * first transaction ends, then sees the committed row (→ null) — or, if the
+ * first rolled back, claims the event itself. `ON CONFLICT DO NOTHING`
+ * rather than catching a unique violation, which would abort the whole
+ * Postgres transaction.
+ */
+export async function claimWebhookEvent(input: ClaimWebhookEventInput, transaction: Transaction) {
+  const [rows] = await sequelize.query(
+    `INSERT INTO payment_webhook_events (id, provider, provider_event_id, event_type, payload, status, created_at)
+     VALUES (gen_random_uuid(), :provider, :providerEventId, :eventType, CAST(:payload AS jsonb), 'RECEIVED', NOW())
+     ON CONFLICT (provider, provider_event_id) DO NOTHING
+     RETURNING id`,
+    {
+      replacements: { ...input, payload: JSON.stringify(input.payload) },
+      transaction,
+    },
+  );
+  const row = (rows as { id: string }[])[0];
+  return row ? row.id : null;
 }
 
-export async function markWebhookEventProcessed(event: PaymentWebhookEvent, status: string) {
-  event.status = status;
-  event.processedAt = new Date();
-  await event.save();
-  return event;
+export async function markWebhookEventProcessed(id: string, status: 'PROCESSED' | 'IGNORED', transaction: Transaction) {
+  await PaymentWebhookEvent.update({ status, processedAt: new Date() }, { where: { id }, transaction });
 }

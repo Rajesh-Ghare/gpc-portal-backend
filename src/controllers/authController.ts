@@ -8,8 +8,8 @@ function clientIp(req: Request): string | null {
 
 export async function requestOtp(req: Request, res: Response) {
   const { mobileNumber } = req.body as { mobileNumber: string };
-  const { expiresAt } = await authService.requestOtp(mobileNumber, clientIp(req));
-  sendSuccess(res, { mobileNumber, expiresAt }, 'OTP sent');
+  const { expiresAt, resendAvailableAt } = await authService.requestOtp(mobileNumber, clientIp(req));
+  sendSuccess(res, { mobileNumber, expiresAt, resendAvailableAt }, 'OTP sent');
 }
 
 export async function verifyOtp(req: Request, res: Response) {

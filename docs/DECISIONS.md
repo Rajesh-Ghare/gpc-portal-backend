@@ -1125,3 +1125,263 @@ Consequences:
   translation-service-generated content) that needs its own provenance
   columns should extend `aiMetadata`'s shape or add a sibling optional
   parameter, never widen `createQuestionSchema` to accept it from a client.
+
+---
+
+## ADR-034: Production Refuses to Start With Mock OTP or Payment Providers
+
+Date: 2026-10-02
+Status: Accepted
+
+Decision:
+`src/config/env.ts` throws at load time (so every entry point fails fast,
+before listening) when `NODE_ENV=production` and `OTP_PROVIDER` or
+`PAYMENT_PROVIDER` resolves to `mock` — including when the variable is
+unset, since both default to `mock`. `AI_PROVIDER=mock` remains allowed in
+production. There is no override flag; a staging environment that needs
+mock providers runs with a `NODE_ENV` other than `production`.
+
+Reason:
+ADR-006's mocks are safe only because they never leave local dev/tests:
+`MockPaymentGateway` signs webhooks with a secret hardcoded in source and
+`POST /payments/:paymentId/simulate` is live whenever it's selected, so
+anyone could forge a "paid" webhook for their own order; `MockOtpProvider`
+logs every OTP to stdout. Both defaulted silently, so a production deploy
+that simply forgot the variables would have been a full payment and login
+bypass. Mock AI output grants no access and still requires human approval
+(ADR-011), so blocking it adds no safety and would block deployment while
+no real AI provider exists.
+
+Alternatives:
+Changing the defaults to "no provider" — rejected: breaks the zero-config
+local setup ADR-006 exists for.
+An `ALLOW_MOCK_PROVIDERS` escape hatch — rejected: an override is exactly
+what gets copy-pasted into a production env file.
+
+Consequences:
+- Production cannot start until a real `OtpProvider` and a real
+  `PaymentGateway` are implemented and selected — this is intended; those
+  are now hard prerequisites for Phase 15 rather than optional backlog
+  items (see `docs/KNOWN_ISSUES.md`).
+- Does not amend ADR-006: business logic still never branches on the
+  provider, only config validation does.
+
+---
+
+## ADR-035: OTP Rate Limiting Is Postgres-Backed, Not In-Memory or Redis
+
+Date: 2026-10-02
+Status: Accepted
+
+Decision:
+OTP rate limits (resend cooldown, per-number and per-IP hourly send caps,
+per-number hourly verify cap) are computed in `authService` from the
+existing `otp_requests` rows, inside a short transaction that holds
+`pg_advisory_xact_lock` on the mobile number (and client IP). Limits are
+domain rules in the service layer, not generic HTTP middleware. Exceeding
+one is `429 RATE_LIMITED` with `Retry-After`.
+
+Reason:
+- Must hold across multiple app instances: an in-memory limiter
+  (e.g. `express-rate-limit`'s default store) gives each instance its own
+  budget, so N instances = N× the limit.
+- ADR-015 rules out a caching layer, and Redis would be a new piece of
+  production infrastructure just for this. Postgres is already shared, and
+  `otp_requests` already records exactly the events being limited (mobile
+  number, IP, time, attempt count) — no new table.
+- The key defenses are per *mobile number* (SMS cost, harassment, guessing
+  a specific account's code), which generic per-IP HTTP middleware can't
+  express.
+- Advisory locks make count-then-insert race-free without
+  `SERIALIZABLE` retries; lock order is always number then IP, so no
+  deadlocks.
+
+Alternatives:
+`express-rate-limit` with its in-memory store — rejected (per-instance
+limits, per-IP only). The same with a Redis store — rejected (new infra,
+ADR-015). A dedicated `rate_limit_counters` table — rejected as redundant
+with `otp_requests`.
+
+Consequences:
+- Each OTP request/verify takes one extra short transaction with 1–2
+  advisory locks. argon2 hashing/verification happens outside it, so the
+  transaction never holds a pooled connection during the slow step.
+- `attempt_count` now counts every verify attempt, including the
+  successful one (it's claimed atomically before checking the hash).
+- Limits depend on correct `req.ip` → `TRUST_PROXY` config (refuses
+  `true`).
+- There is no general per-IP limit on other endpoints yet. If one is ever
+  needed, it should get its own ADR rather than reuse this mechanism by
+  default (other endpoints have no natural event table to count).
+
+---
+
+## ADR-036: Webhook Processing Is One Transaction, With the Event Claim Inside It
+
+Date: 2026-10-02
+Status: Accepted
+
+Decision:
+After signature verification, `paymentService.processWebhook()` runs
+entirely inside one transaction: claim the event id (`INSERT ... ON
+CONFLICT DO NOTHING` on `payment_webhook_events`), `SELECT ... FOR UPDATE`
+the payment then the order, verify amount/currency, update payment/order,
+create entitlements (and their audit rows), mark the event
+`PROCESSED`/`IGNORED`. A `FAILED` event for an already-`PAID` payment is
+recorded as `IGNORED` and changes nothing.
+
+Reason:
+The previous flow wrote the event row first, then updated payment/order
+in a separate transaction, then created entitlements outside any
+transaction. A failure after the event write left a paid order with no
+entitlement, and because the event was already recorded, every provider
+retry answered "already processed" — the customer paid and never got
+access, with no automatic recovery. Concurrent duplicate deliveries also
+raced the check-then-insert and returned 500s, and a late failure event
+could flip a captured payment back to `FAILED`.
+
+Putting the claim inside the transaction makes the provider's built-in
+retry the recovery mechanism: a rolled-back attempt leaves no trace, so
+the retry processes the event normally. The unique index doubles as the
+concurrency lock for duplicates of the same event; the payment/order row
+locks serialize different events for the same order.
+
+Alternatives:
+Keeping the event write first and adding a reconciliation job for
+"PROCESSED event, PAID order, no entitlement" — rejected: repairs the
+symptom after the fact, and the job itself would need this same
+atomicity. Recording the event as `RECEIVED` outside the transaction and
+updating it after — rejected: a crash between the two leaves the same
+"seen but not applied" state.
+
+Consequences:
+- Rejected events (amount mismatch, unknown payment) are not persisted —
+  they roll back with everything else. If an audit trail of rejected
+  webhooks is ever needed, write it in a separate transaction *after* the
+  rollback, never inside this one.
+- `createEntitlementsForPaidOrder` and `recordAudit` now take an optional
+  transaction; anything added to the PAID path must pass it through, or it
+  escapes the rollback.
+- Money is compared in integer minor units, not floats.
+
+---
+
+## ADR-037: Attempt Creation Locks (User, Test) and the Consumed Entitlement
+
+Date: 2026-10-02
+Status: Accepted
+
+Decision:
+`createAttempt()` re-runs its access/limit/policy checks inside the
+creation transaction, after (1) a Postgres advisory lock on
+`attempt:<userId>:<testId>` and (2) `SELECT ... FOR UPDATE` on the user's
+active entitlements for the test, ordered by id. `attempts_used` is
+incremented in that transaction with an atomic `increment`. An unlocked
+pre-check still runs first so unentitled requests skip question selection;
+if it fails but a concurrent request has just created the attempt, that
+attempt is returned. The consumed entitlement is chosen deterministically
+(attempts remaining, soonest expiry, oldest).
+
+Reason:
+The check-then-create was unlocked and the increment ran outside the
+transaction as a read-modify-write. Concurrent starts on different tests
+under one package entitlement both passed the limit check (limit bypass,
+lost increments), and a double-clicked Start raced the
+`attempts_one_in_progress_per_user_test` partial index into a 500. The
+entitlement lookup also returned an arbitrary match, so a user with an
+exhausted pass and a fresh package could be wrongly rejected.
+
+Alternatives:
+Catching the unique-violation and returning the existing attempt — fixes
+the double-click only, not the shared-entitlement limit bypass.
+`SERIALIZABLE` isolation with retries — heavier, and every caller would
+need retry handling.
+
+Consequences:
+- Lock order is always advisory lock → entitlement rows (by id); anything
+  else that locks entitlement rows must lock them by id too.
+- Question selection runs before the transaction (it's read-only and can
+  be slow), so locks are held only for the short write phase.
+- The partial unique index stays as a database-level backstop.
+
+---
+
+## ADR-038: Database TLS Verifies Certificates by Default
+
+Date: 2026-10-02
+Status: Accepted
+
+Decision:
+`DB_SSL=true` now means verified TLS (`rejectUnauthorized: true`), using
+Node's CA store or the provider CA bundle at `DB_SSL_CA_PATH`. Skipping
+verification requires an explicit `DB_SSL_ALLOW_UNVERIFIED=true`, which
+logs a warning at startup. Same behavior in the app (`src/config/dbSsl.ts`)
+and the migration CLI (`sequelize-cli.js`).
+
+Reason:
+Previously `DB_SSL=true` always set `rejectUnauthorized: false`:
+encrypted, but any machine able to intercept the connection could
+impersonate the database (credentials, all data). Verification is the
+default in every mature Postgres client; the provider CA bundle is free.
+
+Alternatives:
+Refusing unverified TLS outright in production — rejected for now: the
+team had no CA bundle configured yet, and a hard block would stop
+deployment without making it safer than `DB_SSL=false` on a private
+network. The explicit, noisy flag keeps the choice visible instead.
+
+Consequences:
+- Existing deployments that set `DB_SSL=true` and relied on the implicit
+  skip will fail to connect until they set `DB_SSL_CA_PATH` (or,
+  temporarily, `DB_SSL_ALLOW_UNVERIFIED=true`). Deliberate: fail closed.
+
+---
+
+## ADR-039: Razorpay Standard Checkout, With Server-Verified Checkout as a Second Confirmation Path
+
+Date: 2026-10-02
+Status: Accepted — amends the payment rule in CLAUDE.md / SECURITY.md
+("entitlements only after a verified webhook")
+
+Decision:
+`RazorpayPaymentGateway` implements `PaymentGateway`. Purchases use
+Razorpay Standard Checkout: `POST /payments/create` creates a Razorpay
+order and returns public checkout options; the browser opens Checkout;
+on success it posts `razorpay_order_id`/`payment_id`/`signature` to
+`POST /payments/verify`. The server (1) verifies
+`HMAC-SHA256(order_id|payment_id, KEY_SECRET)` in constant time, (2)
+fetches the payment from Razorpay's API and checks it belongs to that
+order, (3) captures it if only authorized, and only if it is `captured`
+(4) applies it through the same transactional path as a webhook
+(ADR-036). The `payment.captured`/`payment.failed` webhook, verified over
+the raw request bytes with a separate webhook secret, remains as the
+backup path. The amended rule: **entitlements are created only after the
+server authenticates the payment with the provider — via a verified
+webhook, or a verified checkout signature plus a server-to-server fetch.
+Never on the browser's word alone.**
+
+Reason:
+Webhook-only confirmation means the student pays and then waits (and
+locally, Razorpay can't reach `localhost` at all). The checkout signature
+can't be forged without the key secret, and the server-to-server fetch
+confirms the money was actually captured for this exact order — so the
+frontend remains non-authoritative. This is Razorpay's documented flow.
+
+Alternatives:
+Webhook-only with frontend polling — rejected: slower UX, untestable
+locally without a tunnel, and no more secure. Trusting the checkout
+signature without fetching the payment — rejected: the signature proves
+Razorpay produced the payment id, not that it is captured (it can still be
+merely authorized and later auto-refunded).
+
+Consequences:
+- Both paths can arrive for one payment; the second is a no-op (distinct
+  event ids `checkout:<payment_id>` vs Razorpay's event id; order already
+  PAID; entitlements idempotent per item).
+- Provider errors map to 502 `PAYMENT_PROVIDER_ERROR`, never 401.
+- The key id reaches the browser in the create-payment response (it's
+  public), not via a `VITE_` build variable — test/live key changes need
+  no frontend rebuild.
+- `express.json()` keeps `req.rawBody` for webhook signature checks.
+- Refunds are manual in the Razorpay Dashboard and not yet reflected back
+  (see `docs/KNOWN_ISSUES.md`).

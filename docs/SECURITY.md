@@ -75,10 +75,26 @@ verified with a validly-signed-but-tampered-amount payload in
 order flip to `PAID` and entitlements get created. **The frontend's
 "payment success" callback/redirect is never sufficient on its own to grant
 an entitlement** — there is no code path from a client request directly to
-an entitlement being created; the mock provider's `POST
+an entitlement being created. Razorpay's checkout callback
+(`POST /payments/verify`, ADR-039) only grants access after its HMAC
+signature is verified with the key secret *and* the payment is re-fetched
+from Razorpay's API and confirmed captured for that exact order; the mock provider's `POST
 /payments/:paymentId/simulate` (guarded to only exist when
 `PAYMENT_PROVIDER=mock`) still goes through this exact same
 `processWebhook()` function via a real HMAC-signed payload, not a shortcut.
+
+**Mock providers can never run in production.** The mock payment gateway's
+webhook secret is hardcoded in source and the mock OTP provider logs every
+OTP, so either one in production would be a full auth/payment bypass. The
+server refuses to start when `NODE_ENV=production` and `OTP_PROVIDER` or
+`PAYMENT_PROVIDER` is `mock` or unset (ADR-034). The mock AI provider is
+still allowed — its output grants nothing without human approval.
+
+**OTP endpoints are rate limited server-side** (ADR-035, details in
+`AUTHENTICATION.md` "Rate Limiting"). Per-IP limits depend on `req.ip`
+being the real client address — **set `TRUST_PROXY` correctly when
+deploying behind a load balancer**; `TRUST_PROXY=true` is refused because
+it would let clients spoof `X-Forwarded-For`.
 
 ## Authorization
 
@@ -121,6 +137,10 @@ own?").
       Verified, `tests/integration/attempt.test.ts` (grants `attemptLimit:
       1`, sends a forged `{ attemptLimit: 999 }` on both attempt-creation
       calls, second is still rejected `ATTEMPT_LIMIT_EXCEEDED`).
+- [x] **Concurrent attempt starts cannot exceed an entitlement's attempt
+      limit** (including across different tests sharing one package), and
+      a double-clicked Start yields one attempt — verified,
+      `tests/integration/attempt.test.ts` (ADR-037).
 - [x] **A student cannot call admin-only APIs** — verified across Phases
       4–8 (`FORBIDDEN` from `requirePermission`), including the new Phase 8
       admin attempt/result/release endpoints.
@@ -136,6 +156,22 @@ own?").
       transition or an entitlement** — verified, same file (`{
       alreadyProcessed: true }` on the second delivery, exactly one
       `payment_webhook_events` row asserted).
+- [x] **A failure while granting access after a verified payment rolls
+      everything back, and the provider's retry then grants it** —
+      verified, `tests/integration/payment.test.ts` (forced entitlement
+      failure → no event/order/payment/entitlement change; same event
+      redelivered → `PAID`, 1 entitlement; ADR-036).
+- [x] **Concurrent duplicate webhook deliveries are processed exactly
+      once, and a late failure event never un-pays a captured payment** —
+      verified, same file.
+- [x] **A forged Razorpay checkout signature marks nothing paid**, and a
+      validly-signed but not-captured payment isn't accepted — verified,
+      `tests/integration/razorpay.test.ts` + `tests/unit/razorpayGateway.test.ts`
+      (ADR-039). Webhooks are verified over the raw bytes; a body altered
+      after signing is rejected.
+- [x] **The Razorpay key secret and webhook secret never reach the
+      client** — verified, `razorpay.test.ts` asserts neither appears in
+      the create-payment response; the frontend gets only the public key id.
 - [x] **A student cannot create or simulate a payment for another
       student's order** — verified, same file
       (`orderPolicy.ensureOwnsOrder`, `errorCode FORBIDDEN`).
@@ -146,6 +182,15 @@ own?").
       explicit human approval** — verified: a `PENDING_REVIEW` item creates
       no `questions` row until `POST .../approve` is called; a rejected
       item never creates one at all (`tests/integration/ai.test.ts`).
+- [x] **OTP sending is rate limited** (resend cooldown, per-number and
+      per-client-IP hourly caps) and **OTP guessing is capped per number
+      across OTPs**, so requesting a fresh code doesn't reset the guess
+      budget — verified, `tests/integration/otpRateLimit.test.ts`
+      (`errorCode RATE_LIMITED`, `Retry-After`; ADR-035).
+- [x] **Parallel OTP guesses can't exceed `OTP_MAX_ATTEMPTS`, and a correct
+      OTP can only be used once even under concurrency** — verified, same
+      file (12 parallel wrong guesses → exactly 5 counted; 2 parallel
+      correct verifies → one `200`, one `400`).
 
 **All items on this checklist are now verified with a dedicated test as of
 Phase 14** — the last two (student-result ownership, forged attempt-limit)
@@ -186,6 +231,17 @@ assignment/rule/order/attempt-viewing/payment-creation CRUD or read action
 is deliberately **not** audited — they aren't in the spec's list. Follow
 this same "only the listed actions" discipline as later phases add role/
 permission changes — don't audit-log everything by default.
+
+## Database Connection TLS (ADR-038)
+
+With `DB_SSL=true` the database server's certificate is **verified** —
+against Node's public CA store, or against `DB_SSL_CA_PATH` (the CA bundle
+your database provider publishes for free; no purchased certificate is
+involved). `DB_SSL_ALLOW_UNVERIFIED=true` keeps encryption but skips
+verification — a temporary escape hatch that logs a warning on every
+startup and should be removed before real traffic. If the database runs on
+the same host or private network as the app, `DB_SSL=false` is also
+acceptable. Applies to both the app and `sequelize-cli` migrations.
 
 ## Secrets
 

@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../src/app';
 import {
   AuditLog,
@@ -20,6 +20,8 @@ const app = createApp();
 
 const STUDENT_A_MOBILE = '9700000040';
 const STUDENT_B_MOBILE = '9700000041';
+const STUDENT_C_MOBILE = '9700000042';
+const STUDENT_D_MOBILE = '9700000043';
 
 async function loginAs(mobileNumber: string): Promise<{ token: string; userId: string }> {
   await request(app).post('/api/v1/auth/request-otp').send({ mobileNumber }).expect(200);
@@ -34,6 +36,8 @@ async function loginAs(mobileNumber: string): Promise<{ token: string; userId: s
 describe('Payments (mock gateway, webhook verification, entitlement creation)', () => {
   let studentA: { token: string; userId: string };
   let studentB: { token: string; userId: string };
+  let studentC: { token: string; userId: string };
+  let studentD: { token: string; userId: string };
   let productId: string;
   const orderIds: string[] = [];
   const eventIds: string[] = [];
@@ -42,6 +46,8 @@ describe('Payments (mock gateway, webhook verification, entitlement creation)', 
     await sequelize.authenticate();
     studentA = await loginAs(STUDENT_A_MOBILE);
     studentB = await loginAs(STUDENT_B_MOBILE);
+    studentC = await loginAs(STUDENT_C_MOBILE);
+    studentD = await loginAs(STUDENT_D_MOBILE);
 
     const product = await Product.create({
       name: 'Payment Test Subscription',
@@ -171,6 +177,7 @@ describe('Payments (mock gateway, webhook verification, entitlement creation)', 
 
     const orderAfter = await Order.findByPk(order.id);
     expect(orderAfter!.status).toBe('PENDING');
+    expect(await PaymentWebhookEvent.count({ where: { providerEventId: body.eventId } })).toBe(0);
   });
 
   it('rejects another student simulating this student\'s payment', async () => {
@@ -300,5 +307,84 @@ describe('Payments (mock gateway, webhook verification, entitlement creation)', 
 
     const paymentAfter = await Payment.findByPk(payment.id);
     expect(paymentAfter!.status).toBe('FAILED');
+  });
+
+  async function createPendingPayment(token: string, idempotencyKey: string) {
+    const order = await createOrder(token, idempotencyKey);
+    const payment = (
+      await request(app).post('/api/v1/payments/create').set('Authorization', `Bearer ${token}`).send({ orderId: order.id }).expect(201)
+    ).body.data as { id: string; providerOrderId: string };
+    return { order, payment };
+  }
+
+  function signedEvent(providerOrderId: string, status: 'PAID' | 'FAILED') {
+    const signed = mockPaymentGateway.buildSignedWebhook({
+      eventType: status === 'PAID' ? 'payment.captured' : 'payment.failed',
+      providerOrderId,
+      providerPaymentId: null,
+      amount: 25,
+      currencyCode: 'INR',
+      status,
+    });
+    eventIds.push(signed.body.eventId);
+    return signed;
+  }
+
+  function deliver({ body, signature }: { body: object; signature: string }) {
+    return request(app).post('/api/v1/payments/webhook').set('x-mock-signature', signature).send(body);
+  }
+
+  it('rolls back everything if granting access fails, so the provider retry still grants it', async () => {
+    const { order, payment } = await createPendingPayment(studentC.token, 'payment-key-rollback');
+    const event = signedEvent(payment.providerOrderId, 'PAID');
+
+    const spy = vi.spyOn(Entitlement, 'create').mockRejectedValueOnce(new Error('simulated DB failure'));
+    const failed = await deliver(event);
+    spy.mockRestore();
+    expect(failed.status).toBe(500);
+
+    // Nothing persisted — in particular no event row, which used to make the
+    // retry below answer "already processed" and leave the student without access.
+    expect(await PaymentWebhookEvent.count({ where: { providerEventId: event.body.eventId } })).toBe(0);
+    expect((await Order.findByPk(order.id))!.status).toBe('PENDING');
+    expect((await Payment.findByPk(payment.id))!.status).toBe('PENDING');
+    expect(await Entitlement.count({ where: { orderId: order.id } })).toBe(0);
+
+    const retry = await deliver(event).expect(200);
+    expect(retry.body.data).toMatchObject({ alreadyProcessed: false, status: 'PAID', entitlementsCreated: 1 });
+    expect((await Order.findByPk(order.id))!.status).toBe('PAID');
+    expect((await Payment.findByPk(payment.id))!.status).toBe('PAID');
+    expect(await Entitlement.count({ where: { orderId: order.id } })).toBe(1);
+    const eventRow = await PaymentWebhookEvent.findOne({ where: { providerEventId: event.body.eventId } });
+    expect(eventRow!.status).toBe('PROCESSED');
+    expect(eventRow!.processedAt).not.toBeNull();
+  });
+
+  it('processes concurrent duplicate deliveries of one event exactly once', async () => {
+    const { order } = await createPendingPayment(studentD.token, 'payment-key-concurrent');
+    const payment = await Payment.findOne({ where: { orderId: order.id } });
+    const event = signedEvent(payment!.providerOrderId!, 'PAID');
+
+    const responses = await Promise.all([deliver(event), deliver(event), deliver(event)]);
+    expect(responses.map((r) => r.status)).toEqual([200, 200, 200]);
+    expect(responses.filter((r) => r.body.data.alreadyProcessed === false)).toHaveLength(1);
+    expect(responses.filter((r) => r.body.data.alreadyProcessed === true)).toHaveLength(2);
+
+    expect(await PaymentWebhookEvent.count({ where: { providerEventId: event.body.eventId } })).toBe(1);
+    expect(await Entitlement.count({ where: { orderId: order.id } })).toBe(1);
+  });
+
+  it('ignores a failure event that arrives after the payment was captured (never un-pays)', async () => {
+    const { order, payment } = await createPendingPayment(studentB.token, 'payment-key-late-failure');
+    await deliver(signedEvent(payment.providerOrderId, 'PAID')).expect(200);
+
+    const lateFailure = signedEvent(payment.providerOrderId, 'FAILED');
+    const res = await deliver(lateFailure).expect(200);
+    expect(res.body.data).toEqual({ alreadyProcessed: false, status: 'IGNORED' });
+
+    expect((await Payment.findByPk(payment.id))!.status).toBe('PAID');
+    expect((await Order.findByPk(order.id))!.status).toBe('PAID');
+    const eventRow = await PaymentWebhookEvent.findOne({ where: { providerEventId: lateFailure.body.eventId } });
+    expect(eventRow!.status).toBe('IGNORED');
   });
 });

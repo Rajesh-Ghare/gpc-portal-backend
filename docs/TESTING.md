@@ -50,7 +50,8 @@ explicit assertion (none are "implied by a related test" anymore).
 
 ## Status
 
-77 backend tests across 12 files (2 unit, 10 integration), all passing
+132 backend tests across 17 files (5 unit, 12 integration — Razorpay is
+covered with a stubbed API client, never the real network), all passing
 against a real PostgreSQL database — see `docs/DEVELOPMENT_STATUS.md`'s
 per-phase Testing Status sections for how this grew. The full database
 schema (Phase 2) was verified manually against a real PostgreSQL database
@@ -63,6 +64,16 @@ the full schema and is what every integration test runs against.
 tests share this one real database and a set of seeded users, and running
 test files in parallel raced each other's OTP lookups (see
 `docs/DECISIONS.md`/session history for the incident this fixed).
+
+**OTP rate limits are disabled for the suite** (`vitest.config.mts` sets
+the four `OTP_*_PER_HOUR`/cooldown vars to `0`): every suite logs in as
+the same seeded users from `127.0.0.1`, and `otp_requests` rows persist
+across runs, so real limits would make tests fail depending on what ran
+in the last hour. `tests/integration/otpRateLimit.test.ts` re-enables them
+via `vi.hoisted` (before `src/config/env.ts` loads), uses its own reserved
+numbers (`97000001xx`) and TEST-NET IPs via `X-Forwarded-For`
+(`TRUST_PROXY=1`), and simulates time passing by backdating
+`otp_requests.created_at` rather than sleeping.
 
 ## Running Backend Tests
 

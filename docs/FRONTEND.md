@@ -87,6 +87,23 @@ of `/tests` (see `VerifyOtpPage.tsx`) — the role check runs after
 redirect decision always has the full profile, not the partial one
 `verify-otp` itself returns.
 
+**Payments (`OrderDetailPage`)**: "Pay ₹X" creates the payment, then — if
+the response has `checkout` options (Razorpay) — loads `checkout.js` on
+demand (`features/payments/razorpay.ts`) and opens the modal. Success →
+`POST /payments/verify` → order refetched; modal closed → "Payment
+cancelled" notice (reopening reuses the same payment); `payment.failed` →
+Razorpay's reason shown while the modal stays open for a retry. With the
+mock provider (`checkout: null`) the simulate buttons are shown instead.
+The key id comes from the backend response — there is no
+`VITE_RAZORPAY_KEY_ID`.
+
+The verify page's resend button counts down to the server's
+`resendAvailableAt` (passed from `LoginPage` via router state, refreshed
+on each resend, or derived from a `429`'s `retryAfterSeconds`). It's UX
+only — the server enforces the cooldown (ADR-035). `RATE_LIMITED` is
+intentionally unmapped in `errorMessage.ts` so the server's "try again in
+N minutes" message is shown as-is.
+
 ### Deviations From the Original (Phase 1) Plan
 
 - **No separate `/test/:testId/instructions` route.** The originally-planned

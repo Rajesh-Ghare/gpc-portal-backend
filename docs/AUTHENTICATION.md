@@ -17,19 +17,28 @@ Flow (as implemented in `src/services/authService.ts`):
 ```
 POST /auth/request-otp { mobileNumber }
   → generateOtp() — 6-digit code
-  → hashOtp() — argon2 (see "Hashing Choices" below)
-  → OtpProvider.send(mobileNumber, otp) — MockOtpProvider in dev/test
-  → otp_requests row created (otp_hash, expires_at = now + OTP_EXPIRY_SECONDS,
-    purpose = 'LOGIN', provider, request_ip)
+  → hashOtp() — argon2 (see "Hashing Choices" below), before any DB lock
+  → transaction: advisory-lock the mobile number, then the client IP;
+    enforce send limits (see "Rate Limiting") → 429 RATE_LIMITED if hit;
+    otp_requests row created (otp_hash, expires_at = now +
+    OTP_EXPIRY_SECONDS, purpose = 'LOGIN', provider, request_ip)
+  → after commit: OtpProvider.send(mobileNumber, otp) — MockOtpProvider in
+    dev/test. If sending throws, the row is expired (still counts toward
+    limits) and the error propagates.
+  → returns { expiresAt, resendAvailableAt }
 
 POST /auth/verify-otp { mobileNumber, otp }
+  → transaction: advisory-lock the mobile number; enforce the per-number
+    verify cap → 429 RATE_LIMITED if hit
   → findActiveOtpRequest(mobileNumber, 'LOGIN') — latest unverified,
-    unexpired row
-  → reject (AUTH_OTP_EXPIRED) if none found
-  → reject (AUTH_OTP_INVALID) if attempt_count >= OTP_MAX_ATTEMPTS
-  → verify otp against otp_hash (argon2.verify); on failure, increment
-    attempt_count and reject (AUTH_OTP_INVALID)
-  → markOtpVerified()
+    unexpired row; reject (AUTH_OTP_EXPIRED) if none found
+  → claimOtpAttempt(): one atomic UPDATE incrementing attempt_count only
+    while it's < OTP_MAX_ATTEMPTS; reject (AUTH_OTP_INVALID, "too many")
+    if it couldn't. Every attempt is counted, including the correct one.
+  → commit, then verify otp against otp_hash (argon2.verify) outside the
+    transaction; reject (AUTH_OTP_INVALID) on mismatch
+  → consumeOtpRequest(): conditional UPDATE setting verified_at only if
+    still NULL — a second concurrent correct verify gets AUTH_OTP_EXPIRED
   → findOrCreateUserByMobileNumber() — creates the user + assigns the
     STUDENT role on first login; updates last_login_at/is_mobile_verified
   → generateSessionToken() (32 random bytes, hex) + hashSessionToken()
@@ -67,15 +76,49 @@ Rules:
 - Raw session tokens are never persisted; only `token_hash`. The client
   holds the raw token; the server can always revoke by setting
   `sessions.revoked_at`.
-- `otp_requests.attempt_count` (checked against `OTP_MAX_ATTEMPTS`, default
-  5) and `expires_at` (checked against `OTP_EXPIRY_SECONDS`, default 300)
-  enforce rate limiting/expiry server-side — verified by an integration test
-  that exhausts the attempt count and confirms even the correct OTP is then
-  rejected.
+- `otp_requests.attempt_count` (capped atomically at `OTP_MAX_ATTEMPTS`,
+  default 5) and `expires_at` (`OTP_EXPIRY_SECONDS`, default 300) bound
+  each individual OTP — verified by an integration test that exhausts the
+  attempt count and confirms even the correct OTP is then rejected. The
+  cross-OTP limits are below.
 - Purpose is currently always `'LOGIN'` (hardcoded server-side, not
   client-supplied) — the `otp_requests.purpose` column exists to support
   future purposes (e.g. mobile-number-change verification) without a schema
   change.
+
+### Rate Limiting (ADR-035)
+
+All limits are computed from `otp_requests` itself (no extra table, no
+Redis), over a sliding one-hour window, so they hold across every app
+instance. Each check runs under a Postgres transaction-scoped advisory lock
+(`pg_advisory_xact_lock`) on the mobile number (and, for sends, the client
+IP), so concurrent requests can't race past a limit.
+
+| Env var | Default | Limits |
+|---|---|---|
+| `OTP_RESEND_COOLDOWN_SECONDS` | 60 | Minimum gap between sends to one number |
+| `OTP_MAX_SENDS_PER_NUMBER_PER_HOUR` | 5 | Sends to one number (SMS-cost / harassment protection) |
+| `OTP_MAX_SENDS_PER_IP_PER_HOUR` | 50 | Sends from one client IP across all numbers |
+| `OTP_MAX_VERIFY_ATTEMPTS_PER_NUMBER_PER_HOUR` | 10 | Verify attempts on one number across all its OTPs |
+| `OTP_MAX_ATTEMPTS` | 5 | Verify attempts on a single OTP (pre-existing) |
+
+- `0` disables a limit; a malformed value fails startup. The test suite
+  disables the first four (`vitest.config.mts`) because every suite logs in
+  as the same seeded users from `127.0.0.1`;
+  `tests/integration/otpRateLimit.test.ts` re-enables them.
+- Without the per-number verify cap, requesting a fresh OTP reset the
+  5-guess budget, making a 6-digit code brute-forceable. With the default
+  of 10/hour, one number gets at most 10 guesses per hour (a 10-in-a-million
+  chance).
+- Exceeding a limit returns `429 RATE_LIMITED` with a `Retry-After` header
+  and `errors[0].retryAfterSeconds`; the message says how long to wait.
+- **The per-IP default (50/hour) is deliberately generous.** Indian mobile
+  carriers put many subscribers behind shared carrier-grade NAT addresses,
+  so a tight per-IP cap would lock out real students during a promo burst.
+  It exists to stop one host spraying OTPs across many numbers, not to be
+  the primary defense — the per-number limits are.
+- Per-IP limiting is only as good as `req.ip`. Set `TRUST_PROXY` (hop count
+  or proxy addresses) when behind a load balancer; `true` is refused.
 
 ## Authorization
 

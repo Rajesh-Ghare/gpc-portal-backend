@@ -146,11 +146,54 @@ lower-priority items (pagination, a real non-mock `PaymentGateway`, order
 cancellation) and decide which, if any, are worth addressing before a real
 deployment rather than after.
 
+## Pre-Deployment Hardening (2026-10-02)
+
+A code review ahead of Phase 15 found issues to fix before deploying, in
+priority order:
+
+1. ~~Mock OTP/payment providers could run in production~~ — **done**:
+   startup now refuses (ADR-034, `tests/unit/env.test.ts`; 82 backend tests,
+   all passing).
+2. Real `OtpProvider` + `PaymentGateway` (now hard-blocking production —
+   see `docs/KNOWN_ISSUES.md` High).
+3. ~~Rate limiting on `/auth/request-otp` and `/auth/verify-otp`, plus
+   `trust proxy`~~ — **done** (ADR-035, `tests/integration/otpRateLimit.test.ts`;
+   94 backend / 52 frontend tests, all passing). New migration — run
+   `npm run migrate` (and against the test DB with `NODE_ENV=test`).
+4. ~~`processWebhook()` isn't atomic (paid, no access)~~ — **done**
+   (ADR-036, 3 new tests in `tests/integration/payment.test.ts`).
+5. ~~Attempt-limit bypass under concurrency; double-start 500~~ — **done**
+   (ADR-037, 3 new tests in `tests/integration/attempt.test.ts`; also
+   fixed arbitrary entitlement selection when a user holds several).
+6. ~~Results vanish once a test is closed/archived~~ — **done**.
+7. ~~Start after an expired attempt returned the finished attempt~~ —
+   **done** (auto-submits, then starts fresh per policy/limits).
+8. ~~DB TLS without certificate verification~~ — **done** (ADR-038).
+   **Deploy note:** with `DB_SSL=true`, set `DB_SSL_CA_PATH` to the
+   provider's free CA bundle, or temporarily `DB_SSL_ALLOW_UNVERIFIED=true`
+   (logs a warning). No purchased certificate is needed for this.
+
+**Item 2 — payments done (Razorpay, ADR-039); SMS/OTP provider remains**
+and needs a provider decision plus DLT registration. Manual Razorpay step
+before production: create the webhook in the Dashboard and set
+`RAZORPAY_WEBHOOK_SECRET` (see `docs/COMMERCE_AND_PAYMENTS.md` →
+Razorpay setup).
+
 ## Last Updated
 
-2026-09-14
+2026-10-02
 
 ## Last Development Session
+
+2026-10-02 — pre-deployment hardening (see the list above): production
+guard against mock providers (ADR-034), Postgres-backed OTP rate limiting
++ `TRUST_PROXY` (ADR-035), atomic payment webhook (ADR-036), attempt
+creation locking (ADR-037), results visible after a test is
+closed/archived, fresh attempt after an expired one, verified DB TLS
+(ADR-038). One migration added (`20261002000001`). Every fix has dedicated
+tests; concurrency tests were re-run several times to rule out flakiness.
+
+### Previous session
 
 Implemented and verified Phase 14 (Testing) across both repos. Backend:
 closed the last two `docs/SECURITY.md` checklist items and the

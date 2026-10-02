@@ -8,10 +8,14 @@ export async function createPayment(req: Request, res: Response) {
   sendSuccess(res, payment, 'Payment created', {}, 201);
 }
 
+export async function verifyPayment(req: Request, res: Response) {
+  const result = await paymentService.verifyCheckoutPayment(req.body, req.currentUser!.id);
+  sendSuccess(res, result, 'Payment verified');
+}
+
 /** No req.currentUser here — the caller is the payment provider, authenticated by signature, not a session. */
 export async function webhook(req: Request, res: Response) {
-  const signature = req.headers['x-mock-signature'];
-  const result = await paymentService.processWebhook(req.body, typeof signature === 'string' ? signature : undefined);
+  const result = await paymentService.processWebhook({ rawBody: req.rawBody, body: req.body, headers: req.headers });
   sendSuccess(res, result);
 }
 

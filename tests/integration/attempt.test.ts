@@ -1,4 +1,5 @@
 import request from 'supertest';
+import { Op } from 'sequelize';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app';
 import {
@@ -82,8 +83,11 @@ describe('Exam engine (attempts)', () => {
   let studentAToken: string;
   let studentBToken: string;
   let studentAId: string;
+  let studentBId: string;
   let examId: string;
   let subjectId: string;
+  // Extra exams created by individual tests (e.g. an EXAM_PACKAGE scope), cleaned up in afterAll.
+  const extraExamIds: string[] = [];
 
   beforeAll(async () => {
     await sequelize.authenticate();
@@ -93,6 +97,8 @@ describe('Exam engine (attempts)', () => {
 
     const meRes = await request(app).get('/api/v1/auth/me').set('Authorization', `Bearer ${studentAToken}`).expect(200);
     studentAId = meRes.body.data.id;
+    const meB = await request(app).get('/api/v1/auth/me').set('Authorization', `Bearer ${studentBToken}`).expect(200);
+    studentBId = meB.body.data.id;
 
     const category = await ExamCategory.create({ name: 'Attempt Test Category', slug: 'attempt-test-category' });
     const exam = await CompetitiveExam.create({ categoryId: category.id, name: 'Attempt Test Exam', slug: 'attempt-test-exam' });
@@ -107,19 +113,22 @@ describe('Exam engine (attempts)', () => {
   });
 
   afterAll(async () => {
-    const testIds = (await TestModel.findAll({ where: { competitiveExamId: examId } })).map((t) => t.id);
-    const productItems = await ProductItem.findAll({ where: { testId: testIds } });
+    const allExamIds = [examId, ...extraExamIds];
+    const testIds = (await TestModel.findAll({ where: { competitiveExamId: allExamIds } })).map((t) => t.id);
+    const productItems = await ProductItem.findAll({
+      where: { [Op.or]: [{ testId: testIds }, { competitiveExamId: extraExamIds }] },
+    });
     const productIds = productItems.map((pi) => pi.productId);
 
     await AuditLog.destroy({ where: { entityType: 'entitlement' } });
     await Attempt.destroy({ where: { testId: testIds }, force: true });
     await Entitlement.destroy({ where: { productItemId: productItems.map((pi) => pi.id) } });
-    await ProductItem.destroy({ where: { testId: testIds } });
+    await ProductItem.destroy({ where: { id: productItems.map((pi) => pi.id) } });
     await Product.destroy({ where: { id: productIds } });
-    await TestModel.destroy({ where: { competitiveExamId: examId }, force: true });
+    await TestModel.destroy({ where: { competitiveExamId: allExamIds }, force: true });
     await Question.destroy({ where: { subjectId }, force: true });
     await Subject.destroy({ where: { id: subjectId }, force: true });
-    await CompetitiveExam.destroy({ where: { id: examId }, force: true });
+    await CompetitiveExam.destroy({ where: { id: allExamIds }, force: true });
     await ExamCategory.destroy({ where: { slug: 'attempt-test-category' }, force: true });
     await sequelize.close();
   });
@@ -305,5 +314,149 @@ describe('Exam engine (attempts)', () => {
     // Postgres unique_violation code, confirming this is the real DB
     // constraint rejecting it — not just a Sequelize-side check.
     expect((caught as { parent?: { code?: string } }).parent?.code).toBe('23505');
+  });
+
+  function startAttempt(token: string, testId: string) {
+    return request(app).post(`/api/v1/tests/${testId}/attempts`).set('Authorization', `Bearer ${token}`);
+  }
+
+  it('keeps a student\'s result viewable after the test is closed and archived', async () => {
+    const { questionId, correctOptionId } = await createApprovedQuestion(adminToken, subjectId);
+    const testId = await createPublishedManualTest(adminToken, examId, questionId);
+    await grantEntitlement(adminToken, studentAId, testId);
+
+    const attempt = (await startAttempt(studentAToken, testId).expect(201)).body.data;
+    await request(app)
+      .put(`/api/v1/attempts/${attempt.id}/questions/${attempt.questions[0].id}/answer`)
+      .set('Authorization', `Bearer ${studentAToken}`)
+      .send({ selectedOptionId: correctOptionId })
+      .expect(200);
+    await request(app).post(`/api/v1/attempts/${attempt.id}/submit`).set('Authorization', `Bearer ${studentAToken}`).expect(200);
+
+    await request(app).post(`/api/v1/admin/tests/${testId}/close`).set('Authorization', `Bearer ${adminToken}`).expect(200);
+    const closedRes = await request(app)
+      .get(`/api/v1/attempts/${attempt.id}/result`)
+      .set('Authorization', `Bearer ${studentAToken}`);
+    expect(closedRes.status).toBe(200);
+    expect(closedRes.body.data.correctAnswers).toBe(1);
+
+    await request(app).post(`/api/v1/admin/tests/${testId}/archive`).set('Authorization', `Bearer ${adminToken}`).expect(200);
+    await request(app).get(`/api/v1/attempts/${attempt.id}/result`).set('Authorization', `Bearer ${studentAToken}`).expect(200);
+
+    // Starting a new attempt still requires a published test.
+    expect((await startAttempt(studentAToken, testId)).body.errorCode).toBe('TEST_NOT_FOUND');
+  });
+
+  it('starts a fresh attempt when Start is pressed after the previous attempt\'s time ran out', async () => {
+    const { questionId } = await createApprovedQuestion(adminToken, subjectId);
+    const testRes = await request(app)
+      .post('/api/v1/admin/tests')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ competitiveExamId: examId, title: `Multi Attempt Test ${Date.now()}`, durationSeconds: 1, attemptPolicy: 'MULTIPLE' })
+      .expect(201);
+    const testId = testRes.body.data.id as string;
+    await request(app)
+      .post(`/api/v1/admin/tests/${testId}/questions`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ questionId })
+      .expect(201);
+    await request(app).post(`/api/v1/admin/tests/${testId}/publish`).set('Authorization', `Bearer ${adminToken}`).expect(200);
+    await grantEntitlement(adminToken, studentAId, testId);
+
+    const first = (await startAttempt(studentAToken, testId).expect(201)).body.data;
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    const second = (await startAttempt(studentAToken, testId).expect(201)).body.data;
+    expect(second.id).not.toBe(first.id);
+    expect(second.status).toBe('IN_PROGRESS');
+    expect(second.attemptNumber).toBe(2);
+
+    const firstAfter = await Attempt.findByPk(first.id);
+    expect(firstAfter!.status).toBe('SUBMITTED');
+    expect(firstAfter!.autoSubmitted).toBe(true);
+  });
+
+  it('returns one attempt for concurrent starts of the same test (double-click) and consumes one attempt', async () => {
+    const { questionId } = await createApprovedQuestion(adminToken, subjectId);
+    const testId = await createPublishedManualTest(adminToken, examId, questionId);
+    const grant = await request(app)
+      .post('/api/v1/admin/entitlements')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ userId: studentAId, testId, attemptLimit: 3 })
+      .expect(201);
+
+    const responses = await Promise.all([1, 2, 3].map(() => startAttempt(studentAToken, testId)));
+    expect(responses.map((r) => r.status)).toEqual([201, 201, 201]);
+    expect(new Set(responses.map((r) => r.body.data.id)).size).toBe(1);
+
+    expect(await Attempt.count({ where: { userId: studentAId, testId } })).toBe(1);
+    expect((await Entitlement.findByPk(grant.body.data.id))!.attemptsUsed).toBe(1);
+  });
+
+  describe('a package entitlement shared across tests', () => {
+    let packageEntitlementId: string;
+    const packageTestIds: string[] = [];
+
+    beforeAll(async () => {
+      const exam = await CompetitiveExam.create({
+        categoryId: (await CompetitiveExam.findByPk(examId))!.categoryId,
+        name: 'Attempt Package Exam',
+        slug: `attempt-package-exam-${Date.now()}`,
+      });
+      extraExamIds.push(exam.id);
+
+      const { questionId } = await createApprovedQuestion(adminToken, subjectId);
+      for (let i = 0; i < 3; i += 1) {
+        packageTestIds.push(await createPublishedManualTest(adminToken, exam.id, questionId));
+      }
+
+      const product = await Product.create({
+        name: 'Attempt Package',
+        slug: `attempt-package-${Date.now()}`,
+        productType: 'EXAM_PACKAGE',
+        status: 'ACTIVE',
+        createdBy: studentAId,
+      });
+      const item = await ProductItem.create({
+        productId: product.id,
+        accessType: 'EXAM_PACKAGE',
+        competitiveExamId: exam.id,
+      });
+      const grant = await request(app)
+        .post('/api/v1/admin/entitlements')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ userId: studentBId, productItemId: item.id, attemptLimit: 2 })
+        .expect(201);
+      packageEntitlementId = grant.body.data.id;
+    });
+
+    it('never grants more attempts than the limit when tests are started concurrently', async () => {
+      const responses = await Promise.all(packageTestIds.map((testId) => startAttempt(studentBToken, testId)));
+
+      const statuses = responses.map((r) => r.status).sort();
+      expect(statuses).toEqual([201, 201, 403]);
+      expect(responses.find((r) => r.status === 403)!.body.errorCode).toBe('ATTEMPT_LIMIT_EXCEEDED');
+
+      expect(await Attempt.count({ where: { userId: studentBId, testId: packageTestIds } })).toBe(2);
+      expect((await Entitlement.findByPk(packageEntitlementId))!.attemptsUsed).toBe(2);
+    });
+
+    it('consumes another entitlement with attempts left instead of rejecting on the exhausted package', async () => {
+      // The package is now 2/2. Grant a fresh single-test pass for a test it didn't cover yet.
+      const statuses = await Promise.all(
+        packageTestIds.map(async (testId) => ({ testId, count: await Attempt.count({ where: { userId: studentBId, testId } }) })),
+      );
+      const unstartedTestId = statuses.find((s) => s.count === 0)!.testId;
+      const individual = await request(app)
+        .post('/api/v1/admin/entitlements')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ userId: studentBId, testId: unstartedTestId, attemptLimit: 1 })
+        .expect(201);
+
+      await startAttempt(studentBToken, unstartedTestId).expect(201);
+
+      expect((await Entitlement.findByPk(individual.body.data.id))!.attemptsUsed).toBe(1);
+      expect((await Entitlement.findByPk(packageEntitlementId))!.attemptsUsed).toBe(2);
+    });
   });
 });

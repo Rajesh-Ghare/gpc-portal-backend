@@ -4,6 +4,15 @@
 
 ### Added
 
+- Razorpay Standard Checkout (ADR-039): `RazorpayPaymentGateway`
+  (`PAYMENT_PROVIDER=razorpay`), `POST /payments/verify` (signature +
+  server-to-server payment fetch + capture), Razorpay webhooks verified over
+  the raw request body, `checkout` options in the create-payment response,
+  new error code `PAYMENT_PROVIDER_ERROR` (502). Env: `RAZORPAY_KEY_ID`,
+  `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` (validated at startup).
+  Frontend: "Pay ₹X" opens Razorpay Checkout; handles success (verify),
+  modal dismiss and `payment.failed`. Dependency: `razorpay`.
+
 - Initial repository structure: `backend/` (Node.js + Express + TypeScript +
   Sequelize) and `frontend/` (React + Vite + TypeScript).
 - Full `docs/` documentation system and root `CLAUDE.md`.
@@ -258,6 +267,65 @@
   instead of the sanitizing serializer `GET /attempts/:id` already used).
   There is now exactly one code path that serializes attempt-question data
   for a student.
+- The server now refuses to start when `NODE_ENV=production` and
+  `OTP_PROVIDER` or `PAYMENT_PROVIDER` is `mock` (or unset, which defaults
+  to `mock`). Previously a misconfigured production deploy would log every
+  OTP to stdout and accept forged payment webhooks signed with the mock
+  gateway's hardcoded secret — i.e. free entitlements for anyone. Enforced
+  in `src/config/env.ts` (`assertNoMockProvidersInProduction`), covered by
+  `tests/unit/env.test.ts`. See ADR-034.
+- OTP rate limiting (ADR-035): resend cooldown (60s), per-number (5/h) and
+  per-client-IP (50/h) send caps, and a per-number verify cap (10/h) across
+  all OTPs — previously requesting a fresh OTP reset the 5-guess budget,
+  making 6-digit codes brute-forceable, and OTP sends (future SMS cost)
+  were unlimited. `429 RATE_LIMITED` with `Retry-After`. Postgres-backed
+  with advisory locks, so it holds across instances and under concurrency.
+  `POST /auth/request-otp` now also returns `resendAvailableAt`.
+- Fixed: parallel OTP guesses could exceed `OTP_MAX_ATTEMPTS` (non-atomic
+  read-check-increment), and two parallel correct verifies both created
+  sessions. Attempts are now claimed with one atomic `UPDATE`, and an OTP
+  is consumed with a conditional `UPDATE`.
+- New `TRUST_PROXY` env var for deploying behind a load balancer
+  (`true` refused — it would let clients spoof their IP).
+- Migration `20261002000001-add-otp-rate-limit-indexes` (indexes for the
+  rate-limit window queries).
+- Frontend: the verify page's resend button now shows a countdown matching
+  the server cooldown, and resend errors (previously swallowed silently)
+  are shown.
+- Fixed: a paid customer could permanently miss their access. The payment
+  webhook recorded the event before updating the payment/order and creating
+  entitlements outside any transaction, so a failure mid-way left the order
+  without entitlements and every provider retry was skipped as "already
+  processed". Webhook processing is now one transaction with the event claim
+  inside it (ADR-036) — a failure rolls back completely and the retry
+  succeeds.
+- Fixed: concurrent duplicate webhook deliveries returned 500 (unique-index
+  race); now exactly one processes and the rest return
+  `{ alreadyProcessed: true }`.
+- Fixed: a `FAILED` webhook arriving after a capture flipped the payment
+  back to `FAILED`; it's now recorded as `IGNORED` and changes nothing.
+- Webhook amount verification compares integer minor units, not floats.
+- Fixed: attempt limits could be bypassed by starting attempts on several
+  tests covered by one package entitlement at the same time (unlocked check,
+  `attempts_used` incremented outside the transaction as a
+  read-modify-write). Attempt creation now locks (user, test) and the
+  entitlement rows, and increments atomically in the same transaction
+  (ADR-037).
+- Fixed: a double-clicked Start could return a 500 (partial unique index
+  race); all concurrent starts now receive the same attempt.
+- Fixed: with several entitlements for one test, an arbitrary one was
+  checked, so an exhausted pass could block a fresh package. Now the one to
+  consume is chosen from those with attempts left (soonest expiry first).
+- Fixed: closing or archiving a test made students' results return 404
+  (and an attempt auto-submitted after close never had its IMMEDIATE result
+  released). Results now look up the test in any status.
+- Fixed: pressing Start after a previous attempt's time ran out returned
+  that finished attempt; it's now auto-submitted and a new attempt starts
+  (subject to the attempt policy and limits).
+- Database TLS now verifies the server certificate by default (ADR-038).
+  New `DB_SSL_CA_PATH`; `DB_SSL_ALLOW_UNVERIFIED=true` is an explicit,
+  warned escape hatch. **Breaking for any setup with `DB_SSL=true`**: set
+  one of the two.
 
 ### Database
 

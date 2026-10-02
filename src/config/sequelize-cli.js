@@ -4,6 +4,20 @@
  * `src/config/env.ts` instead — this file exists only for `sequelize-cli`.
  */
 require('dotenv').config();
+const { readFileSync } = require('fs');
+
+// Mirrors buildDbSslOptions() in src/config/dbSsl.ts — keep in sync.
+// Verifies the database certificate unless DB_SSL_ALLOW_UNVERIFIED=true.
+function sslDialectOptions() {
+  if (process.env.DB_SSL !== 'true') return {};
+  if (process.env.DB_SSL_ALLOW_UNVERIFIED === 'true') {
+    return { ssl: { require: true, rejectUnauthorized: false } };
+  }
+  const caPath = process.env.DB_SSL_CA_PATH;
+  return {
+    ssl: { require: true, rejectUnauthorized: true, ...(caPath ? { ca: readFileSync(caPath) } : {}) },
+  };
+}
 
 const common = {
   username: process.env.DB_USER || 'postgres',
@@ -23,9 +37,6 @@ module.exports = {
   },
   production: {
     ...common,
-    dialectOptions:
-      process.env.DB_SSL === 'true'
-        ? { ssl: { require: true, rejectUnauthorized: false } }
-        : {},
+    dialectOptions: sslDialectOptions(),
   },
 };

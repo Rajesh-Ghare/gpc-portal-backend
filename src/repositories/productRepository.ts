@@ -1,4 +1,4 @@
-import type { CreationAttributes, InferAttributes } from 'sequelize';
+import type { CreationAttributes, InferAttributes, Transaction } from 'sequelize';
 import { Product, ProductItem } from '../models';
 
 /**
@@ -60,8 +60,8 @@ export async function softDeleteProduct(product: Product) {
   await product.destroy();
 }
 
-export async function listItems(productId: string) {
-  return ProductItem.findAll({ where: { productId }, order: [['createdAt', 'ASC']] });
+export async function listItems(productId: string, transaction?: Transaction) {
+  return ProductItem.findAll({ where: { productId }, order: [['createdAt', 'ASC']], transaction });
 }
 
 export async function deleteProductItem(item: ProductItem) {

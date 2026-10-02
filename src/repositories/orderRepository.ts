@@ -13,6 +13,15 @@ export async function createOrderItem(data: CreationAttributes<OrderItem>, trans
   return OrderItem.create(data, { transaction });
 }
 
+/** Row-locks the order (no includes — FOR UPDATE can't apply across the outer joins they'd add). */
+export async function findOrderByIdForUpdate(id: string, transaction: Transaction) {
+  return Order.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
+}
+
+export async function listOrderItems(orderId: string, transaction?: Transaction) {
+  return OrderItem.findAll({ where: { orderId }, transaction });
+}
+
 export async function findOrderById(id: string) {
   return Order.findByPk(id, { include: [{ association: 'items' }, { association: 'user' }] });
 }
