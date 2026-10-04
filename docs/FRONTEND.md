@@ -87,6 +87,16 @@ of `/tests` (see `VerifyOtpPage.tsx`) — the role check runs after
 redirect decision always has the full profile, not the partial one
 `verify-otp` itself returns.
 
+**Sign-in (`LoginPage`, ADR-040)**: options come from `GET /auth/methods` —
+Google button (Identity Services loaded on demand, `features/auth/google.ts`,
+client id from the backend), email-code form, and the mobile form only when
+the backend enables `mobile_otp`. `/verify-otp` takes `{ channel: 'email' |
+'mobile', destination }` router state. Every method redirects through
+`useAfterSignIn` (original page → admin dashboard → `/tests`). Users are
+labelled name → email → mobile (`displayName()` in `utils/format.ts`). The
+profile page edits the name and an optional, unverified contact number
+(prefills Razorpay).
+
 **Payments (`OrderDetailPage`)**: "Pay ₹X" creates the payment, then — if
 the response has `checkout` options (Razorpay) — loads `checkout.js` on
 demand (`features/payments/razorpay.ts`) and opens the modal. Success →

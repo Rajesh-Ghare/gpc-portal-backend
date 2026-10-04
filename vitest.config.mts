@@ -16,10 +16,19 @@ export default defineConfig({
       // must never call it. tests/integration/razorpay.test.ts opts in with
       // fake keys and a stubbed API client.
       PAYMENT_PROVIDER: 'mock',
+      // Every sign-in method on, so existing mobile-OTP suites keep running
+      // and email/Google are testable. Email uses the mock provider; Google
+      // token verification is stubbed in tests/integration/emailGoogleAuth.test.ts.
+      AUTH_METHODS: 'mobile_otp,email_otp,google',
+      EMAIL_PROVIDER: 'mock',
+      GOOGLE_CLIENT_ID: 'test-client-id.apps.googleusercontent.com',
     },
     // Never collect compiled copies of the tests if `tsc` ever emits into dist/.
     exclude: ['**/node_modules/**', 'dist/**'],
     testTimeout: 15000,
+    // beforeAll hooks log several users in (argon2 is deliberately slow);
+    // the 10s default flaked under load once the suite grew.
+    hookTimeout: 30000,
     // Integration tests share one real Postgres database and log in as the
     // same seeded users (e.g. SUPER_ADMIN) — running test files in parallel
     // lets one file's OTP request race another's "find the latest active

@@ -1,10 +1,22 @@
 import { Op } from 'sequelize';
 import type { Transaction } from 'sequelize';
-import { OtpRequest, sequelize } from '../models';
+import { OtpRequest, sequelize, type OtpChannel } from '../models';
 import { acquireTransactionLock } from './lockRepository';
 
+/** Where an OTP is sent: a mobile number (SMS) or an email address (EMAIL, lowercase). */
+export interface OtpDestination {
+  channel: OtpChannel;
+  value: string;
+}
+
+function destinationWhere(destination: OtpDestination) {
+  return destination.channel === 'SMS'
+    ? { channel: 'SMS' as const, mobileNumber: destination.value }
+    : { channel: 'EMAIL' as const, email: destination.value };
+}
+
 export interface CreateOtpRequestInput {
-  mobileNumber: string;
+  destination: OtpDestination;
   purpose: string;
   otpHash: string;
   expiresAt: Date;
@@ -16,7 +28,7 @@ export interface CreateOtpRequestInput {
 export async function createOtpRequest(input: CreateOtpRequestInput, transaction?: Transaction) {
   return OtpRequest.create(
     {
-      mobileNumber: input.mobileNumber,
+      ...destinationWhere(input.destination),
       purpose: input.purpose,
       otpHash: input.otpHash,
       expiresAt: input.expiresAt,
@@ -29,19 +41,19 @@ export async function createOtpRequest(input: CreateOtpRequestInput, transaction
 }
 
 /**
- * Serializes OTP request/verify work per key (e.g. one mobile number) for
- * the rest of the transaction — this is what makes the count-then-insert
- * rate-limit checks race-free.
+ * Serializes OTP request/verify work per key (e.g. one mobile number or
+ * email) for the rest of the transaction — this is what makes the
+ * count-then-insert rate-limit checks race-free.
  */
 export async function lockOtpKey(key: string, transaction: Transaction) {
   await acquireTransactionLock(key, transaction);
 }
 
-/** Most recent unverified, unexpired OTP request for a mobile number/purpose. */
-export async function findActiveOtpRequest(mobileNumber: string, purpose: string, transaction?: Transaction) {
+/** Most recent unverified, unexpired OTP request for a destination/purpose. */
+export async function findActiveOtpRequest(destination: OtpDestination, purpose: string, transaction?: Transaction) {
   return OtpRequest.findOne({
     where: {
-      mobileNumber,
+      ...destinationWhere(destination),
       purpose,
       verifiedAt: null,
       expiresAt: { [Op.gt]: new Date() },
@@ -51,29 +63,30 @@ export async function findActiveOtpRequest(mobileNumber: string, purpose: string
   });
 }
 
-export async function findLatestOtpRequest(mobileNumber: string, purpose: string, transaction?: Transaction) {
+export async function findLatestOtpRequest(destination: OtpDestination, purpose: string, transaction?: Transaction) {
   return OtpRequest.findOne({
-    where: { mobileNumber, purpose },
+    where: { ...destinationWhere(destination), purpose },
     order: [['createdAt', 'DESC']],
     transaction,
   });
 }
 
 /** Requests in the window, oldest first — only the columns rate limiting needs. */
-export async function listRecentOtpRequestsForMobile(
-  mobileNumber: string,
+export async function listRecentOtpRequestsForDestination(
+  destination: OtpDestination,
   purpose: string,
   since: Date,
   transaction?: Transaction,
 ) {
   return OtpRequest.findAll({
     attributes: ['createdAt', 'attemptCount'],
-    where: { mobileNumber, purpose, createdAt: { [Op.gte]: since } },
+    where: { ...destinationWhere(destination), purpose, createdAt: { [Op.gte]: since } },
     order: [['createdAt', 'ASC']],
     transaction,
   });
 }
 
+/** Across both channels — the per-IP cap limits total code sends from one network. */
 export async function listRecentOtpRequestsForIp(requestIp: string, since: Date, transaction?: Transaction) {
   return OtpRequest.findAll({
     attributes: ['createdAt'],

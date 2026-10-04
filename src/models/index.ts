@@ -223,4 +223,5 @@ export {
   AuditLog,
   SystemSetting,
 };
+export type { OtpChannel } from './OtpRequest';
 export default models;

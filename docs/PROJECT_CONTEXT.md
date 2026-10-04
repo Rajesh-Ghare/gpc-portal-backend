@@ -4,7 +4,8 @@
 
 This is a generic, configuration-driven competitive-exam practice platform. Students
 discover tests (initially via a Telegram channel acting purely as a promotional
-distribution channel), log in with mobile OTP, pay a small fee for a test/product,
+distribution channel), sign in with Google or an email OTP (mobile OTP once SMS
+is ready — ADR-040), pay a small fee for a test/product,
 and take a timed online exam. The backend evaluates answers and produces a result.
 
 The platform is explicitly **not** hardcoded for any single exam. The same schema and

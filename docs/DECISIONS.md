@@ -1385,3 +1385,58 @@ Consequences:
 - `express.json()` keeps `req.rawBody` for webhook signature checks.
 - Refunds are manual in the Razorpay Dashboard and not yet reflected back
   (see `docs/KNOWN_ISSUES.md`).
+
+---
+
+## ADR-040: Email OTP and Sign in with Google; Mobile OTP Switchable Off
+
+Date: 2026-10-04
+Status: Accepted — extends ADR-005 (mobile OTP stays, but is no longer the
+only or primary method)
+
+Decision:
+Three sign-in methods, each enabled by `AUTH_METHODS`
+(`mobile_otp,email_otp,google`; default `email_otp,google`):
+- **Email OTP** reuses the whole OTP pipeline (argon2-hashed codes,
+  per-destination + per-IP rate limits, atomic attempt counting,
+  single-use) — `otp_requests` gains a `channel` and `email`; codes are sent
+  through a new `EmailProvider` strategy (`mock` | `smtp`).
+- **Google** verifies the Identity Services ID token server-side
+  (`google-auth-library`, audience = our client id; no client secret).
+  Account resolution: linked `google_sub` → else same email (only if Google
+  says `email_verified`) → else a new STUDENT.
+- **Mobile OTP** code is unchanged; when not in `AUTH_METHODS` its
+  endpoints return 404 `AUTH_METHOD_DISABLED` and the production guard
+  (ADR-034) no longer requires a real SMS provider.
+`users.mobile_number` becomes optional. A separate, unverified
+`contact_mobile_number` holds a number students type on their profile.
+Admin access is granted by email with an operator CLI
+(`npm run user:grant-role`), never an HTTP endpoint.
+
+Reason:
+Indian SMS requires DLT template registration (days to weeks) — mobile
+login would block launch. Email needs no registration; most students
+already have Google accounts, making Google the lowest-friction path.
+
+Alternatives:
+Hiding the mobile UI but leaving its endpoints live — rejected: callable
+directly, and production would still demand an SMS provider. Storing the
+optional profile number in `mobile_number` — rejected: an unverified
+number there would let a later SMS login land in someone else's account
+(the number's real owner would be logged into the squatter's account).
+Linking Google to an existing account by email without `email_verified` —
+rejected: account takeover via a Google account claiming someone else's
+address.
+
+Consequences:
+- When SMS is ready: set `OTP_PROVIDER`, add `mobile_otp` to
+  `AUTH_METHODS`. Students who signed up by email should then *verify and
+  attach* a mobile to their existing account (not built yet) rather than
+  create a second account.
+- Seeded mobile-only admin accounts can't sign in while mobile is off; use
+  the CLI to grant roles to real admin emails.
+- The Google client id is public and served by `GET /auth/methods` (no
+  frontend build variable), like the Razorpay key id (ADR-039).
+- Temporary email sender: Gmail SMTP with an App Password (~500/day, may
+  land in spam). Replace with a transactional provider + own domain
+  (SPF/DKIM) before real traffic — config change only.
