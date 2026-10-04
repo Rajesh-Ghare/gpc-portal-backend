@@ -37,7 +37,8 @@ Centralized in `src/errors/errorCodes.ts`. Canonical list (extend,
 don't duplicate, as new modules are built):
 
 ```
-AUTH_OTP_INVALID, AUTH_OTP_EXPIRED, AUTH_UNAUTHORIZED
+AUTH_OTP_INVALID, AUTH_OTP_EXPIRED, AUTH_UNAUTHORIZED, AUTH_GOOGLE_INVALID,
+AUTH_METHOD_DISABLED
 
 CATEGORY_NOT_FOUND, EXAM_NOT_FOUND, SERIES_NOT_FOUND, DUPLICATE_SLUG
 
@@ -76,6 +77,26 @@ RATE_LIMITED, FORBIDDEN, VALIDATION_ERROR, NOT_FOUND, INTERNAL_ERROR
 ### Auth — Implemented (Phase 3)
 
 ```
+GET  /auth/methods       (public) → { methods: ('mobile_otp'|'email_otp'|'google')[],
+                                      googleClientId: string | null }
+
+POST /auth/google        { credential: string (Google ID token) }
+                          → { token, user: { id, mobileNumber, email, fullName, status } }
+                          errorCode AUTH_GOOGLE_INVALID (401) — token invalid, wrong
+                            audience, or the Google email isn't verified
+
+POST /auth/email/request-otp  { email }  → { email, expiresAt, resendAvailableAt }
+                          errorCode RATE_LIMITED (429) — same limits as mobile, per address
+POST /auth/email/verify-otp   { email, otp (6 digits) }
+                          → { token, user } — same errors as /auth/verify-otp
+
+Every sign-in endpoint returns 404 AUTH_METHOD_DISABLED when its method isn't
+in AUTH_METHODS (mobile OTP is disabled by default — ADR-040).
+
+PATCH /auth/me            (Bearer) { fullName?: string | null,
+                            contactMobileNumber?: 10 digits | '' | null }
+                          → same shape as GET /auth/me
+
 POST /auth/request-otp   { mobileNumber: string (10 digits) }
                           → { mobileNumber, expiresAt, resendAvailableAt }
                           errorCode RATE_LIMITED (429) — resend cooldown, or hourly
@@ -90,7 +111,8 @@ POST /auth/verify-otp    { mobileNumber: string, otp: string (6 digits) }
                           errorCode RATE_LIMITED (429) — hourly per-number verify cap
 
 GET  /auth/me             (Authorization: Bearer <token>)
-                          → { id, mobileNumber, email, fullName, status, roles: string[],
+                          → { id, mobileNumber (null for email/Google accounts), email,
+                              contactMobileNumber, fullName, status, roles: string[],
                               permissions: string[] }
                           permissions is the flattened, deduped set of permission
                           codes across all the user's roles (added Phase 13, for the

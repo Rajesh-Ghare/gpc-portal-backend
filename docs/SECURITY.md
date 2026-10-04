@@ -141,6 +141,14 @@ own?").
       limit** (including across different tests sharing one package), and
       a double-clicked Start yields one attempt — verified,
       `tests/integration/attempt.test.ts` (ADR-037).
+- [x] **A Google account whose email Google hasn't verified can't sign in
+      or link to an existing account** (account-takeover guard), and a
+      disabled sign-in method's endpoints can't be called directly —
+      verified, `tests/integration/emailGoogleAuth.test.ts`,
+      `tests/integration/authMethodsDisabled.test.ts` (ADR-040).
+- [x] **An optional profile phone number never becomes a login identity**
+      (`contact_mobile_number` is separate from verified `mobile_number`) —
+      verified, `emailGoogleAuth.test.ts`.
 - [x] **A student cannot call admin-only APIs** — verified across Phases
       4–8 (`FORBIDDEN` from `requirePermission`), including the new Phase 8
       admin attempt/result/release endpoints.

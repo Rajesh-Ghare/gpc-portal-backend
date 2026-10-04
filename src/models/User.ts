@@ -13,8 +13,14 @@ import type { Role } from './Role';
 
 export class User extends Model<InferAttributes<User>, InferCreationAttributes<User>> {
   declare id: CreationOptional<string>;
-  declare mobileNumber: string;
+  /** Verified login identity (SMS OTP). Null for email/Google-only accounts. */
+  declare mobileNumber: string | null;
+  /** Verified login identity (email OTP / Google). Always stored lowercase. */
   declare email: string | null;
+  /** Optional, unverified number the student typed on their profile — never used for login. */
+  declare contactMobileNumber: string | null;
+  /** Google account id (`sub` claim) once linked via Sign in with Google. */
+  declare googleSub: string | null;
   declare fullName: string | null;
   declare passwordHash: string | null;
   declare status: CreationOptional<string>;
@@ -49,8 +55,10 @@ export function initUser(sequelize: Sequelize) {
   User.init(
     {
       id: { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
-      mobileNumber: { type: DataTypes.STRING(20), allowNull: false, unique: true },
+      mobileNumber: { type: DataTypes.STRING(20), allowNull: true, unique: true },
       email: { type: DataTypes.STRING(255), allowNull: true, unique: true },
+      contactMobileNumber: { type: DataTypes.STRING(20), allowNull: true },
+      googleSub: { type: DataTypes.STRING(255), allowNull: true, unique: true },
       fullName: { type: DataTypes.STRING(150), allowNull: true },
       passwordHash: { type: DataTypes.TEXT, allowNull: true },
       status: { type: DataTypes.STRING(30), allowNull: false, defaultValue: 'ACTIVE' },

@@ -2,16 +2,23 @@
 
 ## High
 
-- **No real (non-mock) `OtpProvider` implementation exists yet —
-  production cannot start without one** (ADR-034: the server refuses to
-  start with `NODE_ENV=production` and `OTP_PROVIDER=mock`). Needs an SMS
-  integration (MSG91/Twilio/etc.) behind `OtpProvider`; Indian SMS also
-  needs DLT template registration, which takes days — start early. (The
-  payment side is done: Razorpay, ADR-039.)
+(none — launch-blocking SMS dependency removed by ADR-040.)
 
-## Medium
+## Medium (before real traffic)
 
-(none)
+- **Temporary email sender.** Email OTPs go through Gmail SMTP with an App
+  Password (~500/day on a free account, may land in spam, tied to a
+  personal-style address). Move to a transactional provider (Brevo,
+  Resend, SES…) on your own domain with SPF/DKIM — config change only
+  (`SMTP_*`/`EMAIL_FROM`, or a new `EmailProvider` class for an HTTP API).
+- **Google sign-in needs a client id.** Until `GOOGLE_CLIENT_ID` is set the
+  Google button is hidden in development; production refuses to start with
+  `google` enabled and no client id.
+- **No real SMS `OtpProvider` yet** — only matters once `mobile_otp` is
+  re-enabled. Then: implement it (MSG91/Twilio/…), complete DLT
+  registration, and build "verify and attach a mobile number" for
+  existing email/Google accounts so students don't end up with two
+  accounts.
 
 ## Low
 

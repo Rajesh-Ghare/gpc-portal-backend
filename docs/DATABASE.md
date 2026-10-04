@@ -98,6 +98,25 @@ spec section 20 exactly, with one addition explained below):
     `questions` is created. See ADR-019.
 11. System: `audit_logs`, `system_settings`
 
+Later migrations:
+
+- `20261002000001-add-otp-rate-limit-indexes` — indexes for the OTP
+  rate-limit window queries (ADR-035).
+- `20261004000001-email-and-google-auth` (ADR-040):
+  - `users.mobile_number` → **nullable** (unique still holds for non-null
+    values: one account per *verified* number). Email/Google accounts have
+    none.
+  - `users.contact_mobile_number` (nullable, not unique) — optional,
+    **unverified** number from the profile; never used for login.
+  - `users.google_sub` (nullable, unique) — linked Google account id.
+  - `otp_requests.channel` (`SMS` | `EMAIL`, default `SMS`), `otp_requests.email`,
+    `otp_requests.mobile_number` → nullable, plus CHECK
+    `otp_requests_destination_matches_channel` (exactly one destination,
+    matching the channel) and index `(email, purpose, created_at)`.
+  - `down()` refuses to run if email/Google-only users exist (restoring NOT
+    NULL would require deleting real accounts).
+  - `users.email` is always stored lowercase (normalized in code).
+
 Shared column helpers (`uuidPk`, `timestamps`, `uuidRef`) live in
 `src/utils/migrationHelpers.js` — deliberately **outside** `src/migrations/`,
 since `sequelize-cli` treats every file directly inside that folder as a
@@ -175,7 +194,9 @@ database:
    in later phases).
 2. `users` — one user per role (`9000000001`/SUPER_ADMIN,
    `9000000002`/ADMIN, `9000000003`/STUDENT), pre-verified
-   (`is_mobile_verified: true`) for local dev convenience.
+   (`is_mobile_verified: true`) for local dev convenience. With mobile login
+   off (ADR-040) they can't sign in; give real admins access by email with
+   `npm run user:grant-role -- --email <address> --role SUPER_ADMIN`.
 3. `catalog` — `SSC` category → `SSC CGL` exam; `Quantitative Aptitude`
    subject → `Percentage` and `Profit & Loss` topics.
 4. `sample-questions` — 4 `MCQ_SINGLE` questions (2 per topic), each with a

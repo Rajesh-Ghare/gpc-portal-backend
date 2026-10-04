@@ -4,6 +4,21 @@
 
 ### Added
 
+- Sign in with Google and email OTP (ADR-040). `GET /auth/methods`,
+  `POST /auth/google`, `POST /auth/email/request-otp|verify-otp`,
+  `PATCH /auth/me` (name + optional contact number). `AUTH_METHODS`
+  switches methods on/off (default `email_otp,google`); mobile OTP is kept
+  but disabled — its endpoints return 404 `AUTH_METHOD_DISABLED`. New
+  `EmailProvider` strategy (`mock` | `smtp`), Google ID-token verification
+  (`google-auth-library`), `npm run user:grant-role` operator CLI. Migration
+  `20261004000001-email-and-google-auth` (mobile number optional,
+  `contact_mobile_number`, `google_sub`, OTP `channel`/`email`). Frontend:
+  login shows Google + email (mobile only when enabled), verify page
+  handles both, profile edits name + optional mobile, users shown by
+  name → email → mobile. Login now returns to the page the student
+  originally requested (previously always `/tests`). Test hook timeout
+  raised to 30s (setup with several argon2 logins flaked under load).
+
 - Razorpay Standard Checkout (ADR-039): `RazorpayPaymentGateway`
   (`PAYMENT_PROVIDER=razorpay`), `POST /payments/verify` (signature +
   server-to-server payment fetch + capture), Razorpay webhooks verified over

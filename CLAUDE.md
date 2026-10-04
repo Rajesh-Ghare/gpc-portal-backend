@@ -11,7 +11,8 @@ only "known" from a past conversation and isn't written down here or in
 ## Project Purpose
 
 A generic, configuration-driven competitive-exam practice platform (not
-hardcoded to any one exam). Students log in with mobile OTP, purchase access
+hardcoded to any one exam). Students sign in with Google or an email OTP
+(mobile OTP is built but switched off until SMS is ready), purchase access
 to a test, take a timed online exam with autosaved answers, and receive a
 backend-evaluated result. See `docs/PROJECT_CONTEXT.md` for the full business
 context, and `docs/EXAM_ENGINE.md` / `docs/COMMERCE_AND_PAYMENTS.md` for the
@@ -91,7 +92,10 @@ change happened in `gpc-portal-frontend`.**
 
 ## Authentication Rules
 
-Mobile number + OTP is the primary login path (ADR-005). Raw OTPs and raw
+Sign-in methods are mobile OTP (ADR-005), email OTP and Google (ADR-040),
+each switchable via `AUTH_METHODS` — currently email + Google, since SMS
+needs DLT registration. A disabled method's endpoints return 404, not just
+a hidden button. Raw OTPs and raw
 session tokens are never persisted — only their hashes. See
 `docs/AUTHENTICATION.md`.
 

@@ -173,8 +173,10 @@ priority order:
    provider's free CA bundle, or temporarily `DB_SSL_ALLOW_UNVERIFIED=true`
    (logs a warning). No purchased certificate is needed for this.
 
-**Item 2 — payments done (Razorpay, ADR-039); SMS/OTP provider remains**
-and needs a provider decision plus DLT registration. Manual Razorpay step
+**Item 2 — payments done (Razorpay, ADR-039); SMS replaced for launch by
+Google + email OTP (ADR-040)** — mobile OTP stays built but disabled until
+an SMS provider and DLT registration are ready. Before real traffic: set
+`GOOGLE_CLIENT_ID`, and move email off the temporary Gmail sender. Manual Razorpay step
 before production: create the webhook in the Dashboard and set
 `RAZORPAY_WEBHOOK_SECRET` (see `docs/COMMERCE_AND_PAYMENTS.md` →
 Razorpay setup).

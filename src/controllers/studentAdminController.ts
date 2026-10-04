@@ -7,6 +7,12 @@ export async function searchStudents(req: Request, res: Response) {
   const students = await studentService.searchStudents(search);
   sendSuccess(
     res,
-    students.map((u) => ({ id: u.id, mobileNumber: u.mobileNumber, fullName: u.fullName, status: u.status })),
+    students.map((u) => ({
+      id: u.id,
+      mobileNumber: u.mobileNumber,
+      email: u.email,
+      fullName: u.fullName,
+      status: u.status,
+    })),
   );
 }

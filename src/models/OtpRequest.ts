@@ -1,8 +1,14 @@
 import { CreationOptional, DataTypes, InferAttributes, InferCreationAttributes, Model, Sequelize } from 'sequelize';
 
+export type OtpChannel = 'SMS' | 'EMAIL';
+
 export class OtpRequest extends Model<InferAttributes<OtpRequest>, InferCreationAttributes<OtpRequest>> {
   declare id: CreationOptional<string>;
-  declare mobileNumber: string;
+  declare channel: CreationOptional<OtpChannel>;
+  /** Set for channel SMS (DB CHECK enforces exactly one destination). */
+  declare mobileNumber: string | null;
+  /** Set for channel EMAIL, lowercase. */
+  declare email: string | null;
   declare purpose: string;
   declare otpHash: string;
   declare expiresAt: Date;
@@ -18,7 +24,9 @@ export function initOtpRequest(sequelize: Sequelize) {
   OtpRequest.init(
     {
       id: { type: DataTypes.UUID, primaryKey: true, defaultValue: DataTypes.UUIDV4 },
-      mobileNumber: { type: DataTypes.STRING(20), allowNull: false },
+      channel: { type: DataTypes.STRING(10), allowNull: false, defaultValue: 'SMS' },
+      mobileNumber: { type: DataTypes.STRING(20), allowNull: true },
+      email: { type: DataTypes.STRING(255), allowNull: true },
       purpose: { type: DataTypes.STRING(30), allowNull: false },
       otpHash: { type: DataTypes.TEXT, allowNull: false },
       expiresAt: { type: DataTypes.DATE, allowNull: false },

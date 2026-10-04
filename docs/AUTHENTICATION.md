@@ -7,10 +7,52 @@ and via `tests/integration/auth.test.ts`: request-otp, verify-otp (with
 find-or-create user + default STUDENT role), `GET /auth/me`, `POST
 /auth/logout`, and rejection of unauthenticated requests.
 
+## Sign-in Methods (ADR-040)
+
+| Method | Endpoints | Enabled by |
+|---|---|---|
+| Sign in with Google | `POST /auth/google { credential }` | `google` in `AUTH_METHODS` + `GOOGLE_CLIENT_ID` |
+| Email OTP | `POST /auth/email/request-otp { email }`, `POST /auth/email/verify-otp { email, otp }` | `email_otp` + `EMAIL_PROVIDER` |
+| Mobile OTP | `POST /auth/request-otp`, `POST /auth/verify-otp` (below) | `mobile_otp` + `OTP_PROVIDER` |
+
+`AUTH_METHODS` defaults to `email_otp,google` — mobile is off until SMS
+and DLT registration are ready. A disabled method's endpoints return
+**404 `AUTH_METHOD_DISABLED`** (not just a hidden button), and the
+production guard only demands a real provider for enabled methods.
+`GET /auth/methods` (public) tells the login screen what to show, including
+the public Google client id. All three end in the same session issuance.
+
+**Email OTP** is the mobile flow below with an email destination: same
+argon2 hashing, rate limits (per email address instead of per number, plus
+the shared per-IP cap), atomic attempts and single-use. Addresses are
+lowercased. Codes are sent by `EmailProvider` (`src/strategies/email/`):
+`mock` prints them to the console; `smtp` sends via any SMTP server
+(currently Gmail + App Password as a stopgap).
+
+**Google**: the browser's Google Identity Services button returns an ID
+token; the backend verifies signature, issuer, expiry and that the
+audience is *our* client id (`google-auth-library`; no client secret).
+Then: account linked to this `google_sub` → else an account with the same
+email, **only if Google marks it `email_verified`** (else 401 — prevents
+taking over someone's account with an unverified Google address) → else a
+new STUDENT account named from the Google profile.
+
+**Profile**: `PATCH /auth/me { fullName?, contactMobileNumber? }`. The
+contact number is optional and unverified, stored apart from
+`mobile_number` (the verified login identity) — see ADR-040.
+
+**Granting admin access** (operator CLI, never HTTP):
+`npm run user:grant-role -- --email someone@example.com --role SUPER_ADMIN`
+(production build: `node dist/scripts/grantRole.js …`). Creates the account
+if needed (email not yet verified); the person gains the role's access once
+they prove the address by signing in with Google or an email code.
+Idempotent; audited as `role.grant`.
+
 ## Authentication
 
-Primary method: **mobile number + OTP** (ADR-005). Session token format:
-**opaque bearer token, SHA-256 hashed** (ADR-020, not JWT).
+Session token format: **opaque bearer token, SHA-256 hashed** (ADR-020,
+not JWT). The mobile OTP flow (ADR-005) is described below; email OTP
+follows it exactly with an email destination.
 
 Flow (as implemented in `src/services/authService.ts`):
 
